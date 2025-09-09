@@ -28,31 +28,108 @@ jobs:
     name: Build
     runs-on: ubuntu-24.04
     steps:
+
+      - name: Init scan log
+        run: |
+          echo "Trivy scan started: $(date -u)" > trivy.log
+          # log incoming workflow_dispatch inputs individually
+          echo "repo_owner=${{ github.event.inputs.repoOwner }}" >> trivy.log
+          echo "repo_name=${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
         continue-on-error: false
 
-      - name: Find container image refs
+      - name: Find files that may contain image refs
         id: find-images
         run: |
-          # regex that matches tags or @sha256 digests hosted on mcr or other registries
-          rg -o '([a-z0-9.-]+(?:\:[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs --glob '!.git/**' . \
-            | sort -u > images.txt
-          echo "found=$(wc -l < images.txt)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          rm -f candidate_files.txt files_with_images.txt tmp_images images.txt || true
 
-      - name: Find container image refs (dedupe)
-        id: find_images
+          # candidate file name patterns we care about
+          echo "Finding candidate files by filename patterns..." >> trivy.log
+          find . -type f \( \
+            -iname 'Dockerfile*' -o \
+            -iname '*docker-compose*.yml' -o \
+            -iname '*docker-compose*.yaml' -o \
+            -path './.devcontainer/*' -o \
+            -iname '*.devcontainer.json' -o \
+            -iname '*.bicep' -o \
+            -iname '*.tf' -o \
+            -iname '*.yaml' -o \
+            -iname '*.yml' \
+          \) -not -path './.git/*' -print > candidate_files.txt || true
+
+          # Narrow candidate files to those that actually contain image-like content (speed & noise reduction)
+          echo "Filtering candidate files for image-like content..." >> trivy.log
+          while IFS= read -r f; do
+            # skip if empty
+            [ -z "$f" ] && continue
+            # check for common hints: 'image:' key, FROM lines, or any registry-looking token
+            if rg -n --hidden --no-ignore-vcs --glob '!.git/**' -e '^\s*image\s*:' -e '^\s*FROM\s+' -e '([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+' "$f" > /dev/null 2>&1; then
+              echo "$f" >> files_with_images.txt
+            fi
+          done < candidate_files.txt || true
+
+          # Extract image tokens from the files we found
+          echo "Extracting image tokens from discovered files..." >> trivy.log
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo "Scanning file: $f" >> trivy.log
+            # main registry/image[:tag] or @sha256:digest regex (same as used elsewhere)
+            rg -o '([a-z0-9.-]+(?::[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" >> tmp_images || true
+            # also capture FROM tokens in Dockerfiles
+            rg -o '^\s*FROM\s+[^\s]+' "$f" --hidden --no-ignore-vcs 2>/dev/null | sed -E 's/^\s*FROM\s+//' >> tmp_images || true
+            # attempt to capture common 'image: <value>' YAML key values (simple fallback)
+            rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null | sed -E 's/^image:\s*//' >> tmp_images || true
+          done < files_with_images.txt || true
+
+          # dedupe and write final images.txt
+          if [ -f tmp_images ]; then
+            sort -u tmp_images > images.txt || true
+          else
+            touch images.txt
+          fi
+
+          # expose counts and log
+          found_count=0
+          if [ -f images.txt ]; then
+            found_count=$(wc -l < images.txt || echo 0)
+          fi
+          files_count=0
+          if [ -f files_with_images.txt ]; then
+            files_count=$(wc -l < files_with_images.txt || echo 0)
+          fi
+
+          echo "files_found=${files_count}" >> $GITHUB_OUTPUT
+          echo "found=${found_count}" >> $GITHUB_OUTPUT
+
+          echo "files_with_images=$(wc -l < files_with_images.txt 2>/dev/null || echo 0)" >> trivy.log
+          echo "found_images_file=$(wc -l < images.txt 2>/dev/null || echo 0)" >> trivy.log
+
+
+      - name: Log found images
         run: |
-          # regex that matches registry/image[:tag] or @sha256:digest
-          rg -o --hidden --no-ignore-vcs --glob '!.git/**' '([a-z0-9.-]+(?::[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' . \
-            | sort -u > images.txt || true
-          echo "found=$(wc -l < images.txt)" >> $GITHUB_OUTPUT
+          # record both the step output and the actual images.txt line count
+          echo "found_images_output=${{ steps.find-images.outputs.found }}" >> trivy.log
+          echo "found_files_output=${{ steps.find-images.outputs.files_found }}" >> trivy.log
+          echo "found_images_file=$(wc -l < images.txt)" >> trivy.log
 
       - name: Install Trivy CLI
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Init scan log
+        if: steps.find-images.outputs.found != '0'
+        run: |
+          echo "Trivy scan started: $(date -u)" > trivy.log
+          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
+          echo "found_images=$(wc -l < images.txt)" >> trivy.log
 
       - name: Scan discovered images
         if: steps.find-images.outputs.found != '0'
@@ -61,25 +138,32 @@ jobs:
           while IFS= read -r img; do
             # sanitize name for filename (replace /:@sha256 etc)
             file=$(echo "$img" | sed -E 's/[^A-Za-z0-9._-]/_/g')
-            echo "Scanning $img -> trivy-output/${file}.json"
-            trivy image --quiet --format json -o "trivy-output/${file}.json" "$img" || echo "scan failed for $img" > "trivy-output/${file}.scan_error"
+            echo "Scanning $img -> trivy-output/${file}.json" | tee -a trivy.log
+            if trivy image --quiet --format json -o "trivy-output/${file}.json" "$img"; then
+              echo "SUCCESS: $img" >> trivy.log
+            else
+              echo "FAILED: $img" >> trivy.log
+              echo "scan failed for $img" > "trivy-output/${file}.scan_error"
+              echo "scan failed for $img" >> trivy.log
+            fi
           done < images.txt
 
       - name: Create combined summary.json
         if: steps.find-images.outputs.found != '0'
         run: |
           mkdir -p combined
-          jq -s '{images: map({file: (.[0] | . | path(.))[0]?} ) }' >/dev/null 2>&1 || true
-          # build summary: total findings, by severity, per image
-          jq -n '
-            { images: (inputs | .) }' trivy-output/*.json > /dev/null 2>&1 || true
-          # simpler: aggregate vulnerabilities
-          jq -s 'def allv: (map(.Results // []) | map(.[] | .Vulnerabilities // []) | add // []); {
+          echo "Generating summary at $(date -u)" >> trivy.log
+          # attempt to build an aggregated summary; log jq output & errors
+          if jq -s 'def allv: (map(.Results // []) | map(.[] | .Vulnerabilities // []) | add // []); {
             total: (allv | length),
             by_severity: (allv | group_by(.Severity) | map({(.[0].Severity): length}) | add // {}),
             per_file: (map({file: input_filename, total: ((.Results[]?.Vulnerabilities // []) | length)}) )
-          }' trivy-output/*.json > summary.json || echo '{"total":0}' > summary.json
-        shell: bash
+          }' trivy-output/*.json > summary.json 2>> trivy.log; then
+            echo "Summary generated: $(wc -c < summary.json) bytes" >> trivy.log
+          else
+            echo "Summary generation failed; writing default summary" >> trivy.log
+            echo '{"total":0}' > summary.json
+          fi
 
       - name: Upload Trivy outputs artifacts
         uses: actions/upload-artifact@v4
@@ -89,3 +173,4 @@ jobs:
             trivy-output/
             summary.json
             images.txt
+            trivy.log
