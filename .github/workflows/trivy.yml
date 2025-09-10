@@ -49,7 +49,6 @@ jobs:
             exit 1
           fi
 
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -115,6 +114,77 @@ jobs:
           done < candidate_files.txt || true
           echo "Filtering completed." >> trivy.log
 
+      - name: Extract image values from .devcontainer.json files
+        run: |
+          echo "Extracting image values from .devcontainer.json files..." >> trivy.log
+          # Find all .devcontainer.json files
+          find . -type f -name '*.devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
+
+          # Check if any .devcontainer.json files were found
+          if [ -s devcontainer_files.txt ]; then
+            while IFS= read -r file; do
+              echo "Scanning file: $file" >> trivy.log
+              # Extract the "image" value from the JSON file
+              jq -r '.image // empty' "$file" >> tmp_images || true
+            done < devcontainer_files.txt
+          else
+            echo "No .devcontainer.json files found." >> trivy.log
+          fi
+
+          echo "Image extraction from .devcontainer.json files completed." >> trivy.log
+
+      - name: Extract image values from Dockerfiles
+        run: |
+          echo "Extracting image values from Dockerfiles..." >> trivy.log
+          # Find all Dockerfiles
+          find . -type f -iname 'Dockerfile*' -not -path './.git/*' > dockerfile_files.txt || true
+
+          # Log the found Dockerfiles
+          echo "Found Dockerfiles:" >> trivy.log
+          if [ -s dockerfile_files.txt ]; then
+            cat dockerfile_files.txt >> trivy.log
+          else
+            echo "No Dockerfiles found." >> trivy.log
+          fi
+
+          # Extract "FROM" values
+          if [ -s dockerfile_files.txt ]; then
+            while IFS= read -r file; do
+              echo "Scanning file: $file" >> trivy.log
+              rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
+                | sed -E 's/^\s*FROM\s+//' \
+                | sed -E 's/\s+AS\s+.*//' >> tmp_images || true
+            done < dockerfile_files.txt
+          fi
+
+          echo "Image extraction from Dockerfiles completed." >> trivy.log
+
+      - name: Extract image values from Docker Compose files
+        run: |
+          echo "Extracting image values from Docker Compose files..." >> trivy.log
+          # Find all Docker Compose files
+          find . -type f \( -iname '*docker-compose*.yml' -o -iname '*docker-compose*.yaml' \) -not -path './.git/*' > docker_compose_files.txt || true
+
+          # Log the found Docker Compose files
+          echo "Found Docker Compose files:" >> trivy.log
+          if [ -s docker_compose_files.txt ]; then
+            cat docker_compose_files.txt >> trivy.log
+          else
+            echo "No Docker Compose files found." >> trivy.log
+          fi
+
+          # Extract "image" values
+          if [ -s docker_compose_files.txt ]; then
+            while IFS= read -r file; do
+              echo "Scanning file: $file" >> trivy.log
+              # Extract the "image" values from the YAML file
+              rg -o '^\s*image:\s*[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
+                | sed -E 's/^\s*image:\s*//' >> tmp_images || true
+            done < docker_compose_files.txt
+          fi
+
+          echo "Image extraction from Docker Compose files completed." >> trivy.log
+
       - name: Extract image tokens from discovered files
         run: |
           echo "Extracting image tokens from discovered files..." >> trivy.log
@@ -147,25 +217,25 @@ jobs:
           if [ -f images.txt ]; then
             found_count=$(wc -l < images.txt || echo 0)
           fi
-          files_count=0
+          images_in_files_count=0
           if [ -f files_with_images.txt ]; then
-            files_count=$(wc -l < files_with_images.txt || echo 0)
+            images_in_files_count=$(wc -l < files_with_images.txt || echo 0)
           fi
 
-          echo "files_found=${files_count}" >> $GITHUB_OUTPUT
+          echo "files_found=${images_in_files_count}" >> $GITHUB_OUTPUT
           echo "found=${found_count}" >> $GITHUB_OUTPUT
 
           echo "files_with_images=$(wc -l < files_with_images.txt 2>/dev/null || echo 0)" >> trivy.log
           echo "found_images_file=$(wc -l < images.txt 2>/dev/null || echo 0)" >> trivy.log
           echo "Final counts logged." >> trivy.log
 
-          if [ "$found_count" -eq 0 ] || [ "$files_count" -eq 0 ]; then
+          if [ "$found_count" -eq 0 ] || [ "$images_in_files_count" -eq 0 ]; then
             echo "Error: No files or images found. Stopping the workflow after uploading the log." >> trivy.log
             echo "stop_workflow=true" >> $GITHUB_ENV
           fi
 
       - name: Upload log artifact
-        if: always()
+        if: env.stop_workflow == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: trivy-log
