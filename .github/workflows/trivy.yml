@@ -105,11 +105,17 @@ jobs:
         run: |
           echo "Filtering candidate files for image-like content..." >> trivy.log
           while IFS= read -r f; do
-            # skip if empty
+            # Skip if empty
             [ -z "$f" ] && continue
-            # check for common hints: 'image:' key, FROM lines, or any registry-looking token
+
+            echo "Processing file: $f" >> trivy.log
+
+            # Check for common hints: 'image:' key, FROM lines, or any registry-looking token
             if rg -n --hidden --no-ignore-vcs --glob '!.git/**' -e '^\s*image\s*:' -e '^\s*FROM\s+' -e '([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+' "$f" > /dev/null 2>&1; then
+              echo "File contains image-like content: $f" >> trivy.log
               echo "$f" >> files_with_images.txt
+            else
+              echo "No image-like content found in file: $f" >> trivy.log
             fi
           done < candidate_files.txt || true
           echo "Filtering completed." >> trivy.log
@@ -234,12 +240,19 @@ jobs:
             echo "stop_workflow=true" >> $GITHUB_ENV
           fi
 
+      - name: Debug stop_workflow variable
+        run: |
+          echo "stop_workflow=${{ env.stop_workflow }}"
+
       - name: Upload log artifact
         if: env.stop_workflow == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: trivy-log
-          path: trivy.log
+          path: |
+            trivy.log
+            candidate_files.txt
+            files_with_images.txt
 
       - name: Stop workflow if no files or images found
         if: env.stop_workflow == 'true'
@@ -309,3 +322,5 @@ jobs:
             summary.json
             images.txt
             trivy.log
+            candidate_files.txt
+            files_with_images.txt
