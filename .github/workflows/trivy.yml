@@ -29,6 +29,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
+      - name: Init scan log
+        run: |
+          echo "Trivy scan started: $(date -u)" >> trivy.log
+          # log incoming workflow_dispatch inputs individually
+          echo "repo_owner=${{ github.event.inputs.repoOwner }}" >> trivy.log
+          echo "repo_name=${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
+
+      - name: Debug log file
+        run: |
+          echo "Contents of trivy.log:"
+          cat trivy.log || echo "trivy.log not found"
+
       - name: Validate inputs
         run: |
           if [ -z "${{ github.event.inputs.repoOwner }}" ]; then
@@ -44,14 +58,6 @@ jobs:
             exit 1
           fi
 
-      - name: Init scan log
-        run: |
-          echo "Trivy scan started: $(date -u)" > trivy.log
-          # log incoming workflow_dispatch inputs individually
-          echo "repo_owner=${{ github.event.inputs.repoOwner }}" >> trivy.log
-          echo "repo_name=${{ github.event.inputs.repoName }}" >> trivy.log
-          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
-          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
 
       - name: Checkout code
         uses: actions/checkout@v4
