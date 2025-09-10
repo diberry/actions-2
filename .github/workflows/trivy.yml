@@ -44,13 +44,15 @@ jobs:
           repository: ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
         continue-on-error: false
 
-      - name: Find files that may contain image refs
-        id: find-images
+      - name: Remove old files
         run: |
           set -euo pipefail
+          echo "Removing old files..." >> trivy.log
           rm -f candidate_files.txt files_with_images.txt tmp_images images.txt || true
+          echo "Old files removed." >> trivy.log
 
-          # candidate file name patterns we care about
+      - name: Find candidate files by filename patterns
+        run: |
           echo "Finding candidate files by filename patterns..." >> trivy.log
           find . -type f \( \
             -iname 'Dockerfile*' -o \
@@ -63,8 +65,11 @@ jobs:
             -iname '*.yaml' -o \
             -iname '*.yml' \
           \) -not -path './.git/*' -print > candidate_files.txt || true
+          echo "Candidate file search completed." >> trivy.log
 
-          # log the candidate files and count so we have a record
+      - name: Log candidate files
+        run: |
+          echo "Logging candidate files..." >> trivy.log
           echo "candidate_files_count=$(wc -l < candidate_files.txt 2>/dev/null || echo 0)" >> trivy.log
           echo "candidate_files:" >> trivy.log
           if [ -s candidate_files.txt ]; then
@@ -72,8 +77,10 @@ jobs:
           else
             echo " - (none)" >> trivy.log
           fi
+          echo "Candidate files logged." >> trivy.log
 
-          # Narrow candidate files to those that actually contain image-like content (speed & noise reduction)
+      - name: Filter candidate files for image-like content
+        run: |
           echo "Filtering candidate files for image-like content..." >> trivy.log
           while IFS= read -r f; do
             # skip if empty
@@ -83,8 +90,10 @@ jobs:
               echo "$f" >> files_with_images.txt
             fi
           done < candidate_files.txt || true
+          echo "Filtering completed." >> trivy.log
 
-          # Extract image tokens from the files we found
+      - name: Extract image tokens from discovered files
+        run: |
           echo "Extracting image tokens from discovered files..." >> trivy.log
           while IFS= read -r f; do
             [ -z "$f" ] && continue
@@ -96,15 +105,21 @@ jobs:
             # attempt to capture common 'image: <value>' YAML key values (simple fallback)
             rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null | sed -E 's/^image:\s*//' >> tmp_images || true
           done < files_with_images.txt || true
+          echo "Image token extraction completed." >> trivy.log
 
-          # dedupe and write final images.txt
+      - name: Dedupe and write final images.txt
+        run: |
+          echo "Deduplicating and writing final images.txt..." >> trivy.log
           if [ -f tmp_images ]; then
             sort -u tmp_images > images.txt || true
           else
             touch images.txt
           fi
+          echo "Final images.txt written." >> trivy.log
 
-          # expose counts and log
+      - name: Log final counts
+        run: |
+          echo "Logging final counts..." >> trivy.log
           found_count=0
           if [ -f images.txt ]; then
             found_count=$(wc -l < images.txt || echo 0)
@@ -119,6 +134,7 @@ jobs:
 
           echo "files_with_images=$(wc -l < files_with_images.txt 2>/dev/null || echo 0)" >> trivy.log
           echo "found_images_file=$(wc -l < images.txt 2>/dev/null || echo 0)" >> trivy.log
+          echo "Final counts logged." >> trivy.log
 
 
       - name: Log found images
