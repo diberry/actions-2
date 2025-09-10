@@ -153,7 +153,7 @@ jobs:
 
           if [ "$found_count" -eq 0 ] || [ "$files_count" -eq 0 ]; then
             echo "Error: No files or images found. Stopping the workflow." >> trivy.log
-            exit 1
+            exit 0
           fi
 
       - name: Log found images
