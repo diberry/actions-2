@@ -64,6 +64,15 @@ jobs:
             -iname '*.yml' \
           \) -not -path './.git/*' -print > candidate_files.txt || true
 
+          # log the candidate files and count so we have a record
+          echo "candidate_files_count=$(wc -l < candidate_files.txt 2>/dev/null || echo 0)" >> trivy.log
+          echo "candidate_files:" >> trivy.log
+          if [ -s candidate_files.txt ]; then
+            sed 's/^/ - /' candidate_files.txt >> trivy.log
+          else
+            echo " - (none)" >> trivy.log
+          fi
+
           # Narrow candidate files to those that actually contain image-like content (speed & noise reduction)
           echo "Filtering candidate files for image-like content..." >> trivy.log
           while IFS= read -r f; do
