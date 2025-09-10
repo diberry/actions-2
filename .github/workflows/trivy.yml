@@ -151,6 +151,10 @@ jobs:
           echo "found_images_file=$(wc -l < images.txt 2>/dev/null || echo 0)" >> trivy.log
           echo "Final counts logged." >> trivy.log
 
+          if [ "$found_count" -eq 0 ] || [ "$files_count" -eq 0 ]; then
+            echo "Error: No files or images found. Stopping the workflow." >> trivy.log
+            exit 1
+          fi
 
       - name: Log found images
         run: |
