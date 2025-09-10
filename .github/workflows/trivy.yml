@@ -29,15 +29,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-      - name: Init scan log
-        run: |
-          echo "Trivy scan started: $(date -u)" >> trivy.log
-          # log incoming workflow_dispatch inputs individually
-          echo "repo_owner=${{ github.event.inputs.repoOwner }}" >> trivy.log
-          echo "repo_name=${{ github.event.inputs.repoName }}" >> trivy.log
-          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
-          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
-
       - name: Debug log file
         run: |
           echo "Contents of trivy.log:"
@@ -71,6 +62,17 @@ jobs:
           echo "Removing old files..." >> trivy.log
           rm -f candidate_files.txt files_with_images.txt tmp_images images.txt || true
           echo "Old files removed." >> trivy.log
+
+
+      - name: Init scan log
+        run: |
+          echo "Trivy scan started: $(date -u)" >> trivy.log
+          # log incoming workflow_dispatch inputs individually
+          echo "repo_owner=${{ github.event.inputs.repoOwner }}" >> trivy.log
+          echo "repo_name=${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
+          echo "run_id=${{ github.event.inputs.runId }}" >> trivy.log
+
 
       - name: Find candidate files by filename patterns
         run: |
