@@ -13,7 +13,7 @@ on:
         type: string
       runId:
         description: 'Unique identifier for the workflow run (for tracking purposes)'
-        required: false
+        required: true
         type: string
         default: ''
 
@@ -28,6 +28,21 @@ jobs:
     name: Build
     runs-on: ubuntu-24.04
     steps:
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ github.event.inputs.repoOwner }}" ]; then
+            echo "Error: repoOwner input is required."
+            exit 1
+          fi
+          if [ -z "${{ github.event.inputs.repoName }}" ]; then
+            echo "Error: repoName input is required."
+            exit 1
+          fi
+          if [ -z "${{ github.event.inputs.runId }}" ]; then
+            echo "Error: runId input is required."
+            exit 1
+          fi
 
       - name: Init scan log
         run: |
