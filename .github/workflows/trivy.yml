@@ -120,6 +120,26 @@ jobs:
           done < candidate_files.txt || true
           echo "Filtering completed." >> trivy.log
 
+      - name: Debug .devcontainer.json parsing
+        run: |
+          echo "Debugging .devcontainer.json parsing..." >> trivy.log
+          while IFS= read -r file; do
+            echo "Scanning file: $file" >> trivy.log
+            jq -r '.image // empty' "$file" >> trivy.log || echo "jq failed for $file" >> trivy.log
+          done < devcontainer_files.txt
+          echo "Debugging completed." >> trivy.log
+
+      - name: Debug Dockerfile parsing
+        run: |
+          echo "Debugging Dockerfile parsing..." >> trivy.log
+          while IFS= read -r file; do
+            echo "Scanning file: $file" >> trivy.log
+            rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>>trivy.log \
+              | sed -E 's/^\s*FROM\s+//' \
+              | sed -E 's/\s+AS\s+.*//' >> trivy.log || echo "rg failed for $file" >> trivy.log
+          done < dockerfile_files.txt
+          echo "Debugging completed." >> trivy.log
+
       - name: Extract image values from .devcontainer.json files
         run: |
           echo "Extracting image values from .devcontainer.json files..." >> trivy.log
