@@ -132,7 +132,7 @@ jobs:
       - name: Extract image values from .devcontainer.json files
         run: |
           echo "Extracting image values from .devcontainer.json files..." >> trivy.log
-          # Find all .devcontainer.json files (note the absence of the asterisk before .devcontainer.json)
+          # Find all .devcontainer.json files
           find . -type f -name 'devcontainer.json' -o -path '**/.devcontainer/devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
 
           # Check if any .devcontainer.json files were found
@@ -142,7 +142,8 @@ jobs:
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" value from the JSON file
-              jq -r '.image // empty' "$file" >> tmp_images || true
+              # Only accept image values that look like Docker images
+              jq -r '.image // empty' "$file" | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
             done < devcontainer_files.txt
           else
             echo "No devcontainer.json files found." >> trivy.log
@@ -174,13 +175,14 @@ jobs:
             echo "No Dockerfiles found." >> trivy.log
           fi
 
-          # Extract "FROM" values
+          # Extract "FROM" values and filter for valid Docker image formats
           if [ -s dockerfile_files.txt ]; then
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
                 | sed -E 's/^\s*FROM\s+//' \
-                | sed -E 's/\s+AS\s+.*//' >> tmp_images || true
+                | sed -E 's/\s+AS\s+.*//' \
+                | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
             done < dockerfile_files.txt
           fi
 
@@ -212,13 +214,14 @@ jobs:
             echo "No Docker Compose files found." >> trivy.log
           fi
 
-          # Extract "image" values
+          # Extract "image" values and filter for valid Docker image formats
           if [ -s docker_compose_files.txt ]; then
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" values from the YAML file
               rg -o '^\s*image:\s*[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
-                | sed -E 's/^\s*image:\s*//' >> tmp_images || true
+                | sed -E 's/^\s*image:\s*//' \
+                | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
             done < docker_compose_files.txt
           fi
 
@@ -230,12 +233,20 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             echo "Scanning file: $f" >> trivy.log
-            # main registry/image[:tag] or @sha256:digest regex (same as used elsewhere)
-            rg -o '([a-z0-9.-]+(?::[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" >> tmp_images || true
-            # also capture FROM tokens in Dockerfiles
-            rg -o '^\s*FROM\s+[^\s]+' "$f" --hidden --no-ignore-vcs 2>/dev/null | sed -E 's/^\s*FROM\s+//' >> tmp_images || true
-            # attempt to capture common 'image: <value>' YAML key values (simple fallback)
-            rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null | sed -E 's/^image:\s*//' >> tmp_images || true
+            # main registry/image[:tag] or @sha256:digest regex with more strict filtering
+            rg -o '([a-z0-9.-]+(?::[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" \
+              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+            
+            # Also extract FROM tokens in Dockerfiles with stricter filtering
+            rg -o '^\s*FROM\s+[^\s]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
+              | sed -E 's/^\s*FROM\s+//' \
+              | sed -E 's/\s+AS\s+.*//' \
+              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+            
+            # Extract image values from YAML with stricter filtering
+            rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
+              | sed -E 's/^image:\s*//' \
+              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
           done < files_with_images.txt || true
           echo "Image token extraction completed." >> trivy.log
 
@@ -299,6 +310,15 @@ jobs:
           echo "found_images_output=${{ steps.find-images.outputs.found }}" >> trivy.log
           echo "found_files_output=${{ steps.find-images.outputs.files_found }}" >> trivy.log
           echo "found_images_file=$(wc -l < images.txt)" >> trivy.log
+          
+          # Log the actual images for visibility in both run output and log file
+          echo "==== Found Docker Images ====" | tee -a trivy.log
+          if [ -s images.txt ]; then
+            cat images.txt | tee -a trivy.log
+          else
+            echo "No Docker images found." | tee -a trivy.log
+          fi
+          echo "===========================" | tee -a trivy.log
 
       - name: Install Trivy CLI
         run: |
