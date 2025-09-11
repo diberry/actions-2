@@ -142,8 +142,8 @@ jobs:
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" value from the JSON file
-              # Only accept image values that look like Docker images
-              jq -r '.image // empty' "$file" | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+              # Use a more permissive filter that still excludes non-image values
+              jq -r '.image // empty' "$file" | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
             done < devcontainer_files.txt
           else
             echo "No devcontainer.json files found." >> trivy.log
@@ -175,14 +175,14 @@ jobs:
             echo "No Dockerfiles found." >> trivy.log
           fi
 
-          # Extract "FROM" values and filter for valid Docker image formats
+          # Extract "FROM" values with a more permissive filter
           if [ -s dockerfile_files.txt ]; then
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
                 | sed -E 's/^\s*FROM\s+//' \
                 | sed -E 's/\s+AS\s+.*//' \
-                | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+                | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
             done < dockerfile_files.txt
           fi
 
@@ -221,7 +221,7 @@ jobs:
               # Extract the "image" values from the YAML file
               rg -o '^\s*image:\s*[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
                 | sed -E 's/^\s*image:\s*//' \
-                | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+                | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
             done < docker_compose_files.txt
           fi
 
@@ -233,20 +233,22 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             echo "Scanning file: $f" >> trivy.log
-            # main registry/image[:tag] or @sha256:digest regex with more strict filtering
-            rg -o '([a-z0-9.-]+(?::[0-9]+)?/)?[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" \
-              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
             
-            # Also extract FROM tokens in Dockerfiles with stricter filtering
+            # Extract image references with a more permissive filter
+            rg -o '([a-zA-Z0-9][a-zA-Z0-9._-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" \
+              | grep -v -E '(localhost|127\.0\.0\.1)' \
+              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
+            
+            # Also extract FROM tokens in Dockerfiles
             rg -o '^\s*FROM\s+[^\s]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
               | sed -E 's/^\s*FROM\s+//' \
               | sed -E 's/\s+AS\s+.*//' \
-              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
             
-            # Extract image values from YAML with stricter filtering
+            # Extract image values from YAML
             rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
               | sed -E 's/^image:\s*//' \
-              | grep -E '^[a-z0-9]+(([._-][a-z0-9]+)+)?(:[0-9]+)?/[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$|^[a-z0-9]+(([._-][a-z0-9]+)+)?:[a-z0-9]+([\._-][a-z0-9]+)*$' >> tmp_images || true
+              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' >> tmp_images || true
           done < files_with_images.txt || true
           echo "Image token extraction completed." >> trivy.log
 
@@ -262,7 +264,7 @@ jobs:
 
       - name: Log final counts
         run: |
-          echo "Logging final counts..." >> trivy.log
+          echo "Logging final counts..." | tee -a trivy.log
           found_count=0
           if [ -f images.txt ]; then
             found_count=$(wc -l < images.txt || echo 0)
@@ -275,13 +277,21 @@ jobs:
           echo "files_found=${images_in_files_count}" >> $GITHUB_OUTPUT
           echo "found=${found_count}" >> $GITHUB_OUTPUT
 
-          echo "files_with_images=$(wc -l < files_with_images.txt 2>/dev/null || echo 0)" >> trivy.log
-          echo "found_images_file=$(wc -l < images.txt 2>/dev/null || echo 0)" >> trivy.log
+          echo "==== Summary Counts ====" | tee -a trivy.log
+          echo "Files with image references: ${images_in_files_count}" | tee -a trivy.log
+          echo "Distinct Docker images found: ${found_count}" | tee -a trivy.log
+          echo "======================" | tee -a trivy.log
+          
+          echo "files_with_images=${images_in_files_count}" >> trivy.log
+          echo "found_images_file=${found_count}" >> trivy.log
           echo "Final counts logged." >> trivy.log
 
           if [ "$found_count" -eq 0 ] || [ "$images_in_files_count" -eq 0 ]; then
-            echo "Error: No files or images found. Stopping the workflow after uploading the log." >> trivy.log
+            echo "Error: No files or images found. Stopping the workflow after uploading the log." | tee -a trivy.log
             echo "stop_workflow=true" >> $GITHUB_ENV
+          else
+            echo "Docker images found. Continuing the workflow." | tee -a trivy.log
+            echo "stop_workflow=false" >> $GITHUB_ENV
           fi
 
       - name: Debug stop_workflow variable
@@ -325,7 +335,7 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
       - name: Init scan log
-        if: steps.find-images.outputs.found != '0'
+        if: env.stop_workflow == false
         run: |
           echo "Trivy scan started: $(date -u)" > trivy.log
           echo "repo=${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" >> trivy.log
@@ -333,7 +343,7 @@ jobs:
           echo "found_images=$(wc -l < images.txt)" >> trivy.log
 
       - name: Scan discovered images
-        if: steps.find-images.outputs.found != '0'
+        if: env.stop_workflow == false
         run: |
           mkdir -p trivy-output
           while IFS= read -r img; do
@@ -350,10 +360,10 @@ jobs:
           done < images.txt
 
       - name: Create combined summary.json
-        if: steps.find-images.outputs.found != '0'
+        if: env.stop_workflow == false
         run: |
           mkdir -p combined
-          echo "Generating summary at $(date -u)" >> trivy.log
+          echo "Generating summary at $(date -u)" | tee -a trivy.log
           # attempt to build an aggregated summary; log jq output & errors
           if jq -s 'def allv: (map(.Results // []) | map(.[] | .Vulnerabilities // []) | add // []); {
             total: (allv | length),
