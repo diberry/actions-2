@@ -55,6 +55,13 @@ jobs:
           repository: ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
         continue-on-error: false
 
+      - name: Install required tools
+        run: |
+          echo "Installing required tools..." >> trivy.log
+          sudo apt-get update
+          sudo apt-get install -y ripgrep jq
+          echo "Required tools installed." >> trivy.log
+
       - name: Remove old files
         run: |
           set -euo pipefail
@@ -125,18 +132,20 @@ jobs:
       - name: Extract image values from .devcontainer.json files
         run: |
           echo "Extracting image values from .devcontainer.json files..." >> trivy.log
-          # Find all .devcontainer.json files
-          find . -type f -name '*.devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
+          # Find all .devcontainer.json files (note the absence of the asterisk before .devcontainer.json)
+          find . -type f -name 'devcontainer.json' -o -path '**/.devcontainer/devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
 
           # Check if any .devcontainer.json files were found
           if [ -s devcontainer_files.txt ]; then
+            echo "Found devcontainer.json files:" >> trivy.log
+            cat devcontainer_files.txt >> trivy.log
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" value from the JSON file
               jq -r '.image // empty' "$file" >> tmp_images || true
             done < devcontainer_files.txt
           else
-            echo "No .devcontainer.json files found." >> trivy.log
+            echo "No devcontainer.json files found." >> trivy.log
           fi
 
           echo "Image extraction from .devcontainer.json files completed." >> trivy.log
