@@ -266,10 +266,10 @@ jobs:
 
       - name: Debug stop_workflow variable
         run: |
-          echo "stop_workflow=${{ env.stop_workflow }}"
+          echo "stop_workflow==${{ env.stop_workflow }}"
 
       - name: Upload log artifact
-        if: env.stop_workflow == 'true'
+        if: env.stop_workflow == true
         uses: actions/upload-artifact@v4
         with:
           name: trivy-log
@@ -279,7 +279,7 @@ jobs:
             files_with_images.txt
 
       - name: Stop workflow if no files or images found
-        if: env.stop_workflow == 'true'
+        if: env.stop_workflow == true
         run: |
           echo "Stopping workflow as no files or images were found."
           exit 0
