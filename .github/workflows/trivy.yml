@@ -1,4 +1,9 @@
 name: Trivy image scans
+
+# Images that can't be scanned:
+# Private images (need auth)
+# Devcontainer features (aren't real images)
+
 # touch
 on:
   workflow_dispatch:
@@ -601,12 +606,12 @@ jobs:
             
             # sanitize name for filename (replace /:@sha256 etc)
             file=$(echo "$img" | sed -E 's/[^A-Za-z0-9._-]/_/g')
-            echo "Scanning $img -> trivy-output/${file}.json" | tee -a trivy.log
-            if trivy image --quiet --format json -o "trivy-output/${file}.json" "$img"; then
+            echo "Scanning $img -> ${file}.json" | tee -a trivy.log
+            if trivy image --quiet --format json -o "${file}.json" "$img"; then
               echo "SUCCESS: $img" >> trivy.log
             else
               echo "FAILED: $img" >> trivy.log
-              echo "scan failed for $img" > "trivy-output/${file}.scan_error"
+              echo "scan failed for $img" > "${file}.scan_error"
               echo "scan failed for $img" >> trivy.log
             fi
           done < images.txt
@@ -617,13 +622,13 @@ jobs:
           echo "Generating summary at $(date -u)" | tee -a trivy.log
           
           # Check if trivy-output directory exists and has json files
-          if [ -d "trivy-output" ] && ls trivy-output/*.json >/dev/null 2>&1; then
+          if [ -d "trivy-output" ] && ls *.json >/dev/null 2>&1; then
             # attempt to build an aggregated summary; log jq output & errors
             if jq -s 'def allv: (map(.Results // []) | map(.[] | .Vulnerabilities // []) | add // []); {
               total: (allv | length),
               by_severity: (allv | group_by(.Severity) | map({(.[0].Severity): length}) | add // {}),
               per_file: (map({file: input_filename, total: ((.Results[]?.Vulnerabilities // []) | length)}) )
-            }' trivy-output/*.json > summary.json 2>> trivy.log; then
+            }' *.json > summary.json 2>> trivy.log; then
               echo "Summary generated: $(wc -c < summary.json) bytes" >> trivy.log
             else
               echo "Summary generation failed; writing default summary" >> trivy.log
@@ -640,20 +645,5 @@ jobs:
         with:
           name: scan-${{ github.event.inputs.repoOwner }}-${{ github.event.inputs.repoName }}-${{ github.event.inputs.runId }}
           path: |
-            trivy-output/
-            summary.json
+            *.json
             trivy.log
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-scans-${{ github.run_id }}
-          path: |
-            trivy-output/
-            summary.json
-            images.txt
-            devcontainer_images.txt
-            dockerfile_images.txt
-            docker_compose_images.txt
-            generic_images.txt
-            trivy.log
-            candidate_files.txt
-            files_with_images.txt
