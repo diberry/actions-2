@@ -370,6 +370,62 @@ jobs:
           fi
           echo "===============================" | tee -a trivy.log
 
+      - name: Remove images by not-allowed list prefixes
+        run: |
+          echo "Removing images that start with not-allowed prefixes..." | tee -a trivy.log
+
+          # Define the not-allowed list prefixes here (edit as needed). Any image line that starts with
+          # one of these prefixes will be removed from images.txt.
+          PREFIXES=(
+            "br"
+            "ptn"
+            "res"
+            "ghcr.io/devcontainers/features/"
+          )
+
+          # Files to record removed and kept images
+          touch removed_by_prefix.txt kept_images.txt
+
+          echo "Blacklist prefixes:" | tee -a trivy.log
+          for p in "${PREFIXES[@]}"; do
+            echo " - $p" | tee -a trivy.log
+          done
+
+          if [ ! -f images.txt ] || [ ! -s images.txt ]; then
+            echo "images.txt missing or empty; nothing to filter by prefix" | tee -a trivy.log
+            touch images.txt
+          else
+            while IFS= read -r img; do
+              # skip empty lines
+              [ -z "$img" ] && continue
+              skip=false
+              for p in "${PREFIXES[@]}"; do
+                if [[ "$img" == "$p"* ]]; then
+                  echo "$img" >> removed_by_prefix.txt
+                  skip=true
+                  break
+                fi
+              done
+              if [ "$skip" = false ]; then
+                echo "$img" >> kept_images.txt
+              fi
+            done < images.txt
+
+            # Replace images.txt with the kept images
+            mv kept_images.txt images.txt || true
+          fi
+
+          removed_count=$(wc -l < removed_by_prefix.txt 2>/dev/null || echo 0)
+          kept_count=$(wc -l < images.txt 2>/dev/null || echo 0)
+          echo "Removed $removed_count images by prefix, $kept_count images remain" | tee -a trivy.log
+
+          if [ -s removed_by_prefix.txt ]; then
+            echo "==== Images removed by prefix ====" | tee -a trivy.log
+            cat removed_by_prefix.txt | tee -a trivy.log
+            echo "==================================" | tee -a trivy.log
+          fi
+
+          echo "Prefix-based removal completed." | tee -a trivy.log
       - name: Log final counts
         id: count-output
         run: |
