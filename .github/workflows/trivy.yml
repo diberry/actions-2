@@ -84,20 +84,23 @@ jobs:
           # Create directory for binaries
           mkdir -p ~/bin
           
-          # Install ripgrep directly from GitHub release
-          echo "Downloading ripgrep binary..." >> trivy.log
-          wget -q https://github.com/BurntSushi/ripgrep/releases/download/13.0.0/ripgrep_13.0.0_amd64.deb -O /tmp/ripgrep.deb
-          sudo dpkg -i /tmp/ripgrep.deb || sudo apt-get -f install -y
+          # No need to install ripgrep, using built-in grep instead
+          echo "Using built-in grep utility..." >> trivy.log
           
-          # Install jq directly from GitHub release
-          echo "Downloading jq binary..." >> trivy.log
-          wget -q https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 -O ~/bin/jq
-          chmod +x ~/bin/jq
-          sudo cp ~/bin/jq /usr/local/bin/
+          # Check if jq is already installed
+          if command -v jq &>/dev/null; then
+            echo "jq is already installed, skipping installation..." >> trivy.log
+          else
+            # Install jq directly from GitHub release
+            echo "jq not found, downloading jq binary..." >> trivy.log
+            wget -q https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 -O ~/bin/jq
+            chmod +x ~/bin/jq
+            sudo cp ~/bin/jq /usr/local/bin/
+          fi
           
           # Verify installations
           echo "Verifying installations..." >> trivy.log
-          rg --version >> trivy.log
+          grep --version | head -1 >> trivy.log
           jq --version >> trivy.log
           
           echo "Required tools installed successfully." >> trivy.log
@@ -149,7 +152,7 @@ jobs:
             echo "Processing file: $f" >> trivy.log
 
             # Check for common hints: 'image:' key, FROM lines, or any registry-looking token
-            if rg -n --hidden --no-ignore-vcs --glob '!.git/**' -e '^\s*image\s*:' -e '^\s*FROM\s+' -e '([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+' "$f" > /dev/null 2>&1; then
+            if grep -E -n '^\s*image\s*:|^\s*FROM\s+|([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+' "$f" > /dev/null 2>&1; then
               echo "File contains image-like content: $f" >> trivy.log
               echo "$f" >> files_with_images.txt
             else
@@ -225,7 +228,7 @@ jobs:
           if [ -s dockerfile_files.txt ]; then
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
-              rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
+              grep -o -E '^\s*FROM\s+[^\s]+' "$file" 2>/dev/null \
                 | sed -E 's/^\s*FROM\s+//' \
                 | sed -E 's/\s+AS\s+.*//' \
                 | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a dockerfile_images.txt >> tmp_images || true
@@ -248,9 +251,9 @@ jobs:
           echo "Debugging Dockerfile parsing..." >> trivy.log
           while IFS= read -r file; do
             echo "Scanning file: $file" >> trivy.log
-            rg -o '^\s*FROM\s+[^\s]+' "$file" --hidden --no-ignore-vcs 2>>trivy.log \
+            grep -o -E '^\s*FROM\s+[^\s]+' "$file" 2>>trivy.log \
               | sed -E 's/^\s*FROM\s+//' \
-              | sed -E 's/\s+AS\s+.*//' >> trivy.log || echo "rg failed for $file" >> trivy.log
+              | sed -E 's/\s+AS\s+.*//' >> trivy.log || echo "grep failed for $file" >> trivy.log
           done < dockerfile_files.txt
           echo "Debugging completed." >> trivy.log
 
@@ -277,7 +280,7 @@ jobs:
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" values from the YAML file
-              rg -o '^\s*image:\s*[^\s]+' "$file" --hidden --no-ignore-vcs 2>/dev/null \
+              grep -o -E '^\s*image:\s*[^\s]+' "$file" 2>/dev/null \
                 | sed -E 's/^\s*image:\s*//' \
                 | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a docker_compose_images.txt >> tmp_images || true
             done < docker_compose_files.txt
@@ -306,18 +309,18 @@ jobs:
             echo "Scanning file: $f" >> trivy.log
             
             # Extract image references with a more permissive filter
-            rg -o '([a-zA-Z0-9][a-zA-Z0-9._-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]{64})' --hidden --no-ignore-vcs "$f" \
+            grep -o -E '([a-zA-Z0-9][a-zA-Z0-9._-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]{64})' "$f" 2>/dev/null \
               | grep -v -E '(localhost|127\.0\.0\.1)' \
               | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
             
             # Also extract FROM tokens in Dockerfiles
-            rg -o '^\s*FROM\s+[^\s]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
+            grep -o -E '^\s*FROM\s+[^\s]+' "$f" 2>/dev/null \
               | sed -E 's/^\s*FROM\s+//' \
               | sed -E 's/\s+AS\s+.*//' \
               | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
             
             # Extract image values from YAML
-            rg -o 'image:\s*[A-Za-z0-9._/-:@]+' "$f" --hidden --no-ignore-vcs 2>/dev/null \
+            grep -o -E 'image:\s*[A-Za-z0-9._/-:@]+' "$f" 2>/dev/null \
               | sed -E 's/^image:\s*//' \
               | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
           done < files_with_images.txt || true
