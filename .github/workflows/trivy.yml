@@ -63,20 +63,6 @@ jobs:
           repository: ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
         continue-on-error: false
 
-      - name: Set up tool cache directory
-        run: |
-          sudo mkdir -p /opt/tool-cache
-          sudo chmod 777 /opt/tool-cache
-
-      - name: Cache installed tools
-        id: cache-tools
-        uses: actions/cache@v3
-        with:
-          path: /opt/tool-cache
-          key: ${{ runner.os }}-tools-cache-v1-${{ hashFiles('**/trivy.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-tools-cache-v1-
-
       - name: Install required tools
         run: |
           echo "Installing required tools..." >> trivy.log
@@ -89,9 +75,11 @@ jobs:
           
           # Check if jq is already installed
           if command -v jq &>/dev/null; then
+            echo "jq is already installed, skipping installation..."
             echo "jq is already installed, skipping installation..." >> trivy.log
           else
             # Install jq directly from GitHub release
+            echo "jq not found, downloading jq binary..."
             echo "jq not found, downloading jq binary..." >> trivy.log
             wget -q https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 -O ~/bin/jq
             chmod +x ~/bin/jq
@@ -564,15 +552,9 @@ jobs:
         run: |
           set +e
           # set repo name to input ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
-          echo "Scanning repository ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}" | tee -a trivy-repo-scan.log
-          trivy repo https://github.com/${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }} --format json -o trivy-repo-scan.json .
-          status=$?
-          if [ $status -eq 0 ]; then
-            echo "SUCCESS: Repository scan completed" >> trivy-repo-scan.log
-          else
-            echo "FAILED: Repository scan encountered errors" >> trivy-repo-scan.log
-            echo "Repository scan failed (exit code $status)" >> trivy-repo-scan.log
-          fi
+          REPO_NAME="https://github.com/${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}"
+          echo "Scanning repository $REPO_NAME" | tee -a trivy-repo-scan.log
+          trivy repo $REPO_NAME --format json -o trivy-repo-scan.json >> trivy-repo-scan.log 2>&1
           set -e
 
       # Upload images.txt as an artifact to be used in the next job
