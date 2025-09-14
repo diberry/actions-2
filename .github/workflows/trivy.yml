@@ -63,10 +63,23 @@ jobs:
           repository: ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
         continue-on-error: false
 
+      - name: Cache apt packages
+        id: cache-apt
+        uses: actions/cache@v3
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('**/trivy.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-cache-
+
       - name: Install required tools
         run: |
           echo "Installing required tools..." >> trivy.log
-          sudo apt-get update
+          if [ "${{ steps.cache-apt.outputs.cache-hit }}" != "true" ]; then
+            sudo apt-get update
+          else
+            echo "Using cached apt packages" >> trivy.log
+          fi
           sudo apt-get install -y ripgrep jq
           echo "Required tools installed." >> trivy.log
 
@@ -572,6 +585,8 @@ jobs:
     needs: scan-images
     if: needs.scan-images.outputs.image-matrix != ''
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/aquasecurity/trivy:latest
     strategy:
       matrix: ${{fromJson(needs.scan-images.outputs.image-matrix)}}
 
@@ -586,33 +601,6 @@ jobs:
           echo "Sanitized for artifact: $file"
           echo "file=$file" >> $GITHUB_OUTPUT
 
-      - name: Install Trivy
-        run: |
-          echo "Installing Trivy..."
-          set +e  # Allow commands to fail without stopping the script
-          
-          # Try to install from official script
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          
-          # Check if trivy was installed successfully
-          if ! command -v trivy &> /dev/null; then
-            echo "Failed to install Trivy using the official script, trying alternative method..."
-            
-            # Try using GitHub release download as alternative
-            wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz -O - | tar -zxvf - -C /tmp
-            sudo mv /tmp/trivy /usr/local/bin/
-          fi
-          
-          # Check if trivy was installed successfully after all attempts
-          if ! command -v trivy &> /dev/null; then
-            echo "ERROR: Failed to install Trivy."
-            exit 127
-          fi
-          
-          echo "Trivy installed successfully."
-          trivy --version
-          set -e  # Restore normal bash error handling
-
       - name: Scan image
         run: |
           set +e
@@ -626,15 +614,7 @@ jobs:
           echo "Sanitized from sanitize-name step: ${{ steps.sanitize-name.outputs.file }}"
           echo "Scanning $img -> ${file}.json" | tee -a trivy.log
           
-          # Ensure trivy is available
-          if ! command -v trivy &> /dev/null; then
-            echo "ERROR: Trivy not found, installation may have failed" | tee -a trivy.log
-            echo "scan failed for $img (exit code 127)" > "failures/${file}.scan_error"
-            echo "scan failed for $img (exit code 127)" >> trivy.log
-            exit 0  # Continue workflow without failing the job
-          fi
-          
-          # Run trivy scan
+          # Run trivy scan (using container's pre-installed Trivy)
           trivy image --quiet --format json -o "${file}.json" "$img"
           status=$?
           if [ $status -eq 0 ]; then
