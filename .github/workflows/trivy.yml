@@ -157,98 +157,26 @@ jobs:
           # Find all .devcontainer.json files
           find . -type f -name 'devcontainer.json' -o -path '**/.devcontainer/devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
 
-          # Create a variable with all known registry prefixes for consistent reuse
-          KNOWN_REGISTRIES=(
-            "docker\.io"
-            "ghcr\.io"
-            "mcr\.microsoft\.com"
-            "quay\.io"
-            "registry\.hub\.docker\.com"
-            "registry\.k8s\.io"
-            "gcr\.io"
-            "ecr\.aws"
-            "azurecr\.io"
-            "pkg\.dev"
-            "icr\.io"
-            "public\.ecr\.aws"
-            "docker\.pkg\.github\.com"
-            "hub\.docker\.com"
-            "harbor"
-            "gitlab\.com"
-            "dockerhub\.com"
-          )
-          
-          # Common official Docker Hub images (used without registry prefix)
-          OFFICIAL_IMAGES=(
-            "ubuntu"
-            "alpine"
-            "debian"
-            "centos"
-            "fedora"
-            "node"
-            "python"
-            "golang"
-            "ruby"
-            "openjdk"
-            "nginx"
-            "redis"
-            "postgres"
-            "mysql"
-            "mongo"
-            "elasticsearch"
-            "kafka"
-            "httpd"
-            "wordpress"
-            "tomcat"
-            "memcached"
-            "rabbitmq"
-            "docker"
-            "traefik"
-          )
-          
-          # Create an OR-pattern for grep from the registries
-          REGISTRY_PATTERN=$(IFS="|"; echo "${KNOWN_REGISTRIES[*]}")
-          
-          # Create an OR-pattern for official images
-          OFFICIAL_PATTERN=$(IFS="|"; echo "${OFFICIAL_IMAGES[*]}")
-          
-          echo "Using registry pattern: $REGISTRY_PATTERN" >> trivy.log
-          echo "Using official images pattern: $OFFICIAL_PATTERN" >> trivy.log
+          # Create output files
+          touch devcontainer_images.txt
 
-          # Check if any .devcontainer.json files were found
+          # Process devcontainer.json files if any were found
           if [ -s devcontainer_files.txt ]; then
-            echo "Found devcontainer.json files:" >> trivy.log
-            cat devcontainer_files.txt >> trivy.log
+            echo "Found $(wc -l < devcontainer_files.txt) devcontainer.json files" >> trivy.log
+            
             while IFS= read -r file; do
-              echo "Scanning file: $file" >> trivy.log
-              # Extract the "image" value from the JSON file
-              # Use a more permissive filter that still excludes non-image values
-              jq -r '.image // empty' "$file" | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a devcontainer_images.txt >> tmp_images || true
-            done < devcontainer_files.txt
-          else
-            echo "No devcontainer.json files found." >> trivy.log
-          fi
-
-          # Display the images found in devcontainer.json files
-          echo "==== Images found in devcontainer.json files ====" | tee -a trivy.log
-          if [ -s devcontainer_images.txt ]; then
-            cat devcontainer_images.txt | tee -a trivy.log
-          else
-            echo "No images found in devcontainer.json files." | tee -a trivy.log
-          fi
-          echo "=================================================" | tee -a trivy.log
+              file_dir=$(dirname "$file")
+              echo "Processing $file" >> trivy.log
+              
+              # Extract direct image reference if exists
+              image=$(jq -r '.image // empty' "$file")
+              if [ ! -z "$image" ]; then
+                echo "Found image: $image" >> trivy.log
+                echo "$image" >> devcontainer_images.txt
+                echo "$image" >> tmp_images || true
+              fi
 
           echo "Image extraction from .devcontainer.json files completed." >> trivy.log
-
-      - name: Debug .devcontainer.json parsing
-        run: |
-          echo "Debugging .devcontainer.json parsing..." >> trivy.log
-          while IFS= read -r file; do
-            echo "Scanning file: $file" >> trivy.log
-            jq -r '.image // empty' "$file" >> trivy.log || echo "jq failed for $file" >> trivy.log
-          done < devcontainer_files.txt
-          echo "Debugging completed." >> trivy.log
-
 
       - name: Extract image values from Dockerfiles
         run: |
@@ -289,18 +217,6 @@ jobs:
 
           echo "Image extraction from Dockerfiles completed." >> trivy.log
 
-      - name: Debug Dockerfile parsing
-        run: |
-          echo "Debugging Dockerfile parsing..." >> trivy.log
-          while IFS= read -r file; do
-            echo "Scanning file: $file" >> trivy.log
-            grep -o -E '^\s*FROM\s+[^\s]+' "$file" 2>>trivy.log \
-              | sed -E 's/^\s*FROM\s+//' \
-              | sed -E 's/\s+AS\s+.*//' >> trivy.log || echo "grep failed for $file" >> trivy.log
-          done < dockerfile_files.txt
-          echo "Debugging completed." >> trivy.log
-
-
       - name: Extract image values from Docker Compose files
         run: |
           echo "Extracting image values from Docker Compose files..." >> trivy.log
@@ -309,23 +225,36 @@ jobs:
 
           # Create a separate file for Docker Compose images
           touch docker_compose_images.txt
+          touch container_names.txt
 
-          # Log the found Docker Compose files
-          echo "Found Docker Compose files:" >> trivy.log
-          if [ -s docker_compose_files.txt ]; then
-            cat docker_compose_files.txt >> trivy.log
-          else
-            echo "No Docker Compose files found." >> trivy.log
-          fi
-
-          # Extract "image" values and filter for valid Docker image formats
+          # Extract all "image" and "container_name" values without filtering
           if [ -s docker_compose_files.txt ]; then
             while IFS= read -r file; do
               echo "Scanning file: $file" >> trivy.log
-              # Extract the "image" values from the YAML file
-              grep -o -E '^\s*image:\s*[^\s]+' "$file" 2>/dev/null \
-                | sed -E 's/^\s*image:\s*//' \
-                | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a docker_compose_images.txt >> tmp_images || true
+              
+              # Extract the "image" values from the YAML file - grab entire value without filtering
+              echo "  Looking for image: properties..." >> trivy.log
+              grep -E '^\s*image:' "$file" 2>/dev/null | sed -E 's/^\s*image:\s*//' | 
+              while IFS= read -r img; do
+                # Skip if empty
+                [ -z "$img" ] && continue
+                # Remove any quotes and trailing comments
+                cleaned_img=$(echo "$img" | sed -E 's/^["'"'"']//;s/["'"'"']$//;s/\s+#.*$//')
+                echo "  Found image: $cleaned_img" >> trivy.log
+                echo "$cleaned_img" | tee -a docker_compose_images.txt >> tmp_images
+              done
+              
+              # Extract the "container_name" values from the YAML file
+              echo "  Looking for container_name: properties..." >> trivy.log
+              grep -E '^\s*container_name:' "$file" 2>/dev/null | sed -E 's/^\s*container_name:\s*//' |
+              while IFS= read -r container; do
+                # Skip if empty
+                [ -z "$container" ] && continue
+                # Remove any quotes and trailing comments
+                cleaned_container=$(echo "$container" | sed -E 's/^["'"'"']//;s/["'"'"']$//;s/\s+#.*$//')
+                echo "  Found container_name: $cleaned_container" >> trivy.log
+                echo "$cleaned_container" >> container_names.txt
+              done
             done < docker_compose_files.txt
           fi
 
@@ -337,6 +266,15 @@ jobs:
             echo "No images found in Docker Compose files." | tee -a trivy.log
           fi
           echo "=============================================" | tee -a trivy.log
+          
+          # Display the container names found in Docker Compose files
+          echo "==== Container names found in Docker Compose files ====" | tee -a trivy.log
+          if [ -s container_names.txt ]; then
+            cat container_names.txt | tee -a trivy.log
+          else
+            echo "No container names found in Docker Compose files." | tee -a trivy.log
+          fi
+          echo "==================================================" | tee -a trivy.log
 
           echo "Image extraction from Docker Compose files completed." >> trivy.log
 
@@ -550,6 +488,7 @@ jobs:
             devcontainer_images.txt
             dockerfile_images.txt
             docker_compose_images.txt
+            container_names.txt
             generic_images.txt
 
             # Store files in a common location for Act
@@ -568,6 +507,7 @@ jobs:
           cp -f devcontainer_images.txt /tmp/act-shared-data/devcontainer_images.txt || touch /tmp/act-shared-data/devcontainer_images.txt
           cp -f dockerfile_images.txt /tmp/act-shared-data/dockerfile_images.txt || touch /tmp/act-shared-data/dockerfile_images.txt
           cp -f docker_compose_images.txt /tmp/act-shared-data/docker_compose_images.txt || touch /tmp/act-shared-data/docker_compose_images.txt
+          cp -f container_names.txt /tmp/act-shared-data/container_names.txt || touch /tmp/act-shared-data/container_names.txt
           cp -f generic_images.txt /tmp/act-shared-data/generic_images.txt || touch /tmp/act-shared-data/generic_images.txt
           
           # Ensure the files are accessible to all users
@@ -593,13 +533,12 @@ jobs:
             devcontainer_images.txt
             dockerfile_images.txt
             docker_compose_images.txt
+            container_names.txt
             generic_images.txt
 
 
   scan-repo:
     name: Scan Repository
-    needs: find-images
-    if: needs.find-images.outputs.stop_workflow != 'true'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/aquasecurity/trivy:latest
@@ -658,6 +597,7 @@ jobs:
           cp -f /tmp/act-shared-data/devcontainer_images.txt ./ 2>/dev/null || echo "devcontainer_images.txt not found"
           cp -f /tmp/act-shared-data/dockerfile_images.txt ./ 2>/dev/null || echo "dockerfile_images.txt not found"
           cp -f /tmp/act-shared-data/docker_compose_images.txt ./ 2>/dev/null || echo "docker_compose_images.txt not found"
+          cp -f /tmp/act-shared-data/container_names.txt ./ 2>/dev/null || echo "container_names.txt not found"
           cp -f /tmp/act-shared-data/generic_images.txt ./ 2>/dev/null || echo "generic_images.txt not found"
           echo "Using artifact from:"
           cat /tmp/act-shared-data/artifact-log.txt 2>/dev/null || echo "No artifact log found"
