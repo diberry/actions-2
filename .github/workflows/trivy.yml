@@ -569,7 +569,7 @@ jobs:
 
 
   scan-repo:
-    name: Scan Docker Images
+    name: Scan Repository
     needs: find-images
     if: needs.find-images.outputs.stop_workflow != 'true'
     runs-on: ubuntu-latest
