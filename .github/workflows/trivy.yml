@@ -580,6 +580,8 @@ jobs:
         run: |
           img="${{ matrix.image }}"
           file=$(echo "$img" | sed -E 's/[^A-Za-z0-9._-]/_/g')
+          echo "Original image name: $img"
+          echo "Sanitized for artifact: $file"
           echo "file=$file" >> $GITHUB_OUTPUT
 
       - name: Scan image
@@ -591,6 +593,8 @@ jobs:
           # Skip if image is empty
           [ -z "$img" ] && exit 0
           file=$(echo "$img" | sed -E 's/[^A-Za-z0-9._-]/_/g')
+          echo "Sanitized filename: $file"
+          echo "Sanitized from sanitize-name step: ${{ steps.sanitize-name.outputs.file }}"
           echo "Scanning $img -> ${file}.json" | tee -a trivy.log
           trivy image --quiet --format json -o "${file}.json" "$img"
           status=$?
