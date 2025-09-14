@@ -80,46 +80,27 @@ jobs:
       - name: Install required tools
         run: |
           echo "Installing required tools..." >> trivy.log
-          sudo apt-get update
           
-          if [ "${{ steps.cache-tools.outputs.cache-hit }}" == "true" ]; then
-            echo "Using cached tools" >> trivy.log
-            if [ -f /opt/tool-cache/ripgrep.deb ]; then
-              sudo dpkg -i /opt/tool-cache/ripgrep.deb || sudo apt-get -f install -y
-            else
-              sudo apt-get install -y ripgrep
-              ripgrep_deb=$(find /var/cache/apt/archives/ -name "ripgrep*.deb" | head -1)
-              if [ -n "$ripgrep_deb" ]; then
-                cp "$ripgrep_deb" /opt/tool-cache/ripgrep.deb
-              fi
-            fi
-            
-            if [ -f /opt/tool-cache/jq.deb ]; then
-              sudo dpkg -i /opt/tool-cache/jq.deb || sudo apt-get -f install -y
-            else
-              sudo apt-get install -y jq
-              jq_deb=$(find /var/cache/apt/archives/ -name "jq*.deb" | head -1)
-              if [ -n "$jq_deb" ]; then
-                cp "$jq_deb" /opt/tool-cache/jq.deb
-              fi
-            fi
-          else
-            echo "Installing fresh tools" >> trivy.log
-            sudo apt-get install -y ripgrep jq
-            
-            # Store the installed packages in our cache directory
-            ripgrep_deb=$(find /var/cache/apt/archives/ -name "ripgrep*.deb" | head -1)
-            if [ -n "$ripgrep_deb" ]; then
-              cp "$ripgrep_deb" /opt/tool-cache/ripgrep.deb
-            fi
-            
-            jq_deb=$(find /var/cache/apt/archives/ -name "jq*.deb" | head -1)
-            if [ -n "$jq_deb" ]; then
-              cp "$jq_deb" /opt/tool-cache/jq.deb
-            fi
-          fi
+          # Create directory for binaries
+          mkdir -p ~/bin
           
-          echo "Required tools installed." >> trivy.log
+          # Install ripgrep directly from GitHub release
+          echo "Downloading ripgrep binary..." >> trivy.log
+          wget -q https://github.com/BurntSushi/ripgrep/releases/download/13.0.0/ripgrep_13.0.0_amd64.deb -O /tmp/ripgrep.deb
+          sudo dpkg -i /tmp/ripgrep.deb || sudo apt-get -f install -y
+          
+          # Install jq directly from GitHub release
+          echo "Downloading jq binary..." >> trivy.log
+          wget -q https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 -O ~/bin/jq
+          chmod +x ~/bin/jq
+          sudo cp ~/bin/jq /usr/local/bin/
+          
+          # Verify installations
+          echo "Verifying installations..." >> trivy.log
+          rg --version >> trivy.log
+          jq --version >> trivy.log
+          
+          echo "Required tools installed successfully." >> trivy.log
 
 
 
