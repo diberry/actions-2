@@ -576,7 +576,7 @@ jobs:
       matrix: ${{fromJson(needs.scan-images.outputs.image-matrix)}}
 
     steps:
-    
+
       - name: Sanitize image name for artifact
         id: sanitize-name
         run: |
@@ -585,6 +585,33 @@ jobs:
           echo "Original image name: $img"
           echo "Sanitized for artifact: $file"
           echo "file=$file" >> $GITHUB_OUTPUT
+
+      - name: Install Trivy
+        run: |
+          echo "Installing Trivy..."
+          set +e  # Allow commands to fail without stopping the script
+          
+          # Try to install from official script
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Check if trivy was installed successfully
+          if ! command -v trivy &> /dev/null; then
+            echo "Failed to install Trivy using the official script, trying alternative method..."
+            
+            # Try using GitHub release download as alternative
+            wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.tar.gz -O - | tar -zxvf - -C /tmp
+            sudo mv /tmp/trivy /usr/local/bin/
+          fi
+          
+          # Check if trivy was installed successfully after all attempts
+          if ! command -v trivy &> /dev/null; then
+            echo "ERROR: Failed to install Trivy."
+            exit 127
+          fi
+          
+          echo "Trivy installed successfully."
+          trivy --version
+          set -e  # Restore normal bash error handling
 
       - name: Scan image
         run: |
@@ -598,6 +625,16 @@ jobs:
           echo "Sanitized filename: $file"
           echo "Sanitized from sanitize-name step: ${{ steps.sanitize-name.outputs.file }}"
           echo "Scanning $img -> ${file}.json" | tee -a trivy.log
+          
+          # Ensure trivy is available
+          if ! command -v trivy &> /dev/null; then
+            echo "ERROR: Trivy not found, installation may have failed" | tee -a trivy.log
+            echo "scan failed for $img (exit code 127)" > "failures/${file}.scan_error"
+            echo "scan failed for $img (exit code 127)" >> trivy.log
+            exit 0  # Continue workflow without failing the job
+          fi
+          
+          # Run trivy scan
           trivy image --quiet --format json -o "${file}.json" "$img"
           status=$?
           if [ $status -eq 0 ]; then
