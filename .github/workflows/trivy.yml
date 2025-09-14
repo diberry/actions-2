@@ -140,7 +140,7 @@ jobs:
             echo "Processing file: $f" >> trivy.log
 
             # Check for common hints: 'image:' key, FROM lines, or any registry-looking token
-            if grep -E -n '^\s*image\s*:|^\s*FROM\s+|([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+' "$f" > /dev/null 2>&1; then
+            if grep -E -n "^\s*image\s*:|^\s*FROM\s+|${REGISTRY_PATTERN}|([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+" "$f" > /dev/null 2>&1; then
               echo "File contains image-like content: $f" >> trivy.log
               echo "$f" >> files_with_images.txt
             else
@@ -157,8 +157,63 @@ jobs:
           # Find all .devcontainer.json files
           find . -type f -name 'devcontainer.json' -o -path '**/.devcontainer/devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
 
-          # Create a separate file for devcontainer images
-          touch devcontainer_images.txt
+          # Create a variable with all known registry prefixes for consistent reuse
+          KNOWN_REGISTRIES=(
+            "docker\.io"
+            "ghcr\.io"
+            "mcr\.microsoft\.com"
+            "quay\.io"
+            "registry\.hub\.docker\.com"
+            "registry\.k8s\.io"
+            "gcr\.io"
+            "ecr\.aws"
+            "azurecr\.io"
+            "pkg\.dev"
+            "icr\.io"
+            "public\.ecr\.aws"
+            "docker\.pkg\.github\.com"
+            "hub\.docker\.com"
+            "harbor"
+            "gitlab\.com"
+            "dockerhub\.com"
+          )
+          
+          # Common official Docker Hub images (used without registry prefix)
+          OFFICIAL_IMAGES=(
+            "ubuntu"
+            "alpine"
+            "debian"
+            "centos"
+            "fedora"
+            "node"
+            "python"
+            "golang"
+            "ruby"
+            "openjdk"
+            "nginx"
+            "redis"
+            "postgres"
+            "mysql"
+            "mongo"
+            "elasticsearch"
+            "kafka"
+            "httpd"
+            "wordpress"
+            "tomcat"
+            "memcached"
+            "rabbitmq"
+            "docker"
+            "traefik"
+          )
+          
+          # Create an OR-pattern for grep from the registries
+          REGISTRY_PATTERN=$(IFS="|"; echo "${KNOWN_REGISTRIES[*]}")
+          
+          # Create an OR-pattern for official images
+          OFFICIAL_PATTERN=$(IFS="|"; echo "${OFFICIAL_IMAGES[*]}")
+          
+          echo "Using registry pattern: $REGISTRY_PATTERN" >> trivy.log
+          echo "Using official images pattern: $OFFICIAL_PATTERN" >> trivy.log
 
           # Check if any .devcontainer.json files were found
           if [ -s devcontainer_files.txt ]; then
@@ -168,7 +223,7 @@ jobs:
               echo "Scanning file: $file" >> trivy.log
               # Extract the "image" value from the JSON file
               # Use a more permissive filter that still excludes non-image values
-              jq -r '.image // empty' "$file" | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a devcontainer_images.txt >> tmp_images || true
+              jq -r '.image // empty' "$file" | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a devcontainer_images.txt >> tmp_images || true
             done < devcontainer_files.txt
           else
             echo "No devcontainer.json files found." >> trivy.log
@@ -219,7 +274,7 @@ jobs:
               grep -o -E '^\s*FROM\s+[^\s]+' "$file" 2>/dev/null \
                 | sed -E 's/^\s*FROM\s+//' \
                 | sed -E 's/\s+AS\s+.*//' \
-                | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a dockerfile_images.txt >> tmp_images || true
+                | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a dockerfile_images.txt >> tmp_images || true
             done < dockerfile_files.txt
           fi
 
@@ -270,7 +325,7 @@ jobs:
               # Extract the "image" values from the YAML file
               grep -o -E '^\s*image:\s*[^\s]+' "$file" 2>/dev/null \
                 | sed -E 's/^\s*image:\s*//' \
-                | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a docker_compose_images.txt >> tmp_images || true
+                | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a docker_compose_images.txt >> tmp_images || true
             done < docker_compose_files.txt
           fi
 
@@ -299,18 +354,18 @@ jobs:
             # Extract image references with a more permissive filter
             grep -o -E '([a-zA-Z0-9][a-zA-Z0-9._-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]{64})' "$f" 2>/dev/null \
               | grep -v -E '(localhost|127\.0\.0\.1)' \
-              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
+              | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a generic_images.txt >> tmp_images || true
             
             # Also extract FROM tokens in Dockerfiles
             grep -o -E '^\s*FROM\s+[^\s]+' "$f" 2>/dev/null \
               | sed -E 's/^\s*FROM\s+//' \
               | sed -E 's/\s+AS\s+.*//' \
-              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
+              | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a generic_images.txt >> tmp_images || true
             
             # Extract image values from YAML
             grep -o -E 'image:\s*[A-Za-z0-9._/-:@]+' "$f" 2>/dev/null \
               | sed -E 's/^image:\s*//' \
-              | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$' | tee -a generic_images.txt >> tmp_images || true
+              | grep -E "^[a-zA-Z0-9][a-zA-Z0-9._-]*(:[0-9]+)?/[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$|^(${REGISTRY_PATTERN})/|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$|^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9._-]+$|^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$" | tee -a generic_images.txt >> tmp_images || true
           done < files_with_images.txt || true
           
           # Display the images found in generic files
@@ -360,7 +415,8 @@ jobs:
             # Only keep lines that:
             # 1. Start with a known registry (docker.io, ghcr.io, mcr.microsoft.com, etc.)
             # 2. Have a valid Docker image format with tags or digests
-            if echo "$img" | grep -E '^(docker\.io/|ghcr\.io/|mcr\.microsoft\.com/|quay\.io/|registry\.hub\.docker\.com/|.*\.azurecr\.io/|.*\.pkg\.dev/|[a-zA-Z0-9][-a-zA-Z0-9]*/[a-zA-Z0-9][-a-zA-Z0-9]*|ubuntu|alpine|debian|centos|fedora|node|python|golang|ruby|openjdk|nginx|redis|postgres|mysql|mongo|elasticsearch|kafka)' > /dev/null; then
+            # 3. Are official Docker Hub images (ubuntu, alpine, etc.)
+            if echo "$img" | grep -E "^(${REGISTRY_PATTERN})/|^[a-zA-Z0-9][-a-zA-Z0-9]*/[a-zA-Z0-9][-a-zA-Z0-9]*|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$" > /dev/null; then
               echo "$img" >> filtered_images.txt
             else
               echo "Filtering out non-Docker image: $img" >> trivy.log
@@ -667,7 +723,7 @@ jobs:
       - name: Upload scan outputs
         uses: actions/upload-artifact@v4
         with:
-          name: scan-output-${{ steps.sanitize-name.outputs.file }}
+          name: scan-image-${{ steps.sanitize-name.outputs.file }}
           path: |
             *.json
             trivy.log
