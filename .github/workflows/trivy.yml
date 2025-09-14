@@ -65,46 +65,44 @@ jobs:
 
       - name: Install required tools
         run: |
-          echo "Installing required tools..." >> trivy.log
+          echo "Installing required tools..." | tee -a trivy.log
           
           # Create directory for binaries
           mkdir -p ~/bin
           
           # No need to install ripgrep, using built-in grep instead
-          echo "Using built-in grep utility..." >> trivy.log
+          echo "Using built-in grep utility..." | tee -a trivy.log
           
           # Check if jq is already installed
           if command -v jq &>/dev/null; then
-            echo "jq is already installed, skipping installation..."
-            echo "jq is already installed, skipping installation..." >> trivy.log
+            echo "jq is already installed, skipping installation..." | tee -a trivy.log
           else
             # Install jq directly from GitHub release
-            echo "jq not found, downloading jq binary..."
-            echo "jq not found, downloading jq binary..." >> trivy.log
+            echo "jq not found, downloading jq binary..." | tee -a trivy.log
             wget -q https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 -O ~/bin/jq
             chmod +x ~/bin/jq
             sudo cp ~/bin/jq /usr/local/bin/
           fi
           
           # Verify installations
-          echo "Verifying installations..." >> trivy.log
-          grep --version | head -1 >> trivy.log
-          jq --version >> trivy.log
+          echo "Verifying installations..." | tee -a trivy.log
+          grep --version | head -1 | tee -a trivy.log
+          jq --version | tee -a trivy.log
           
-          echo "Required tools installed successfully." >> trivy.log
+          echo "Required tools installed successfully." | tee -a trivy.log
 
 
 
       - name: Remove old files
         run: |
           set -euo pipefail
-          echo "Removing old files..." >> trivy.log
+          echo "Removing old files..." | tee -a trivy.log
           rm -f candidate_files.txt files_with_images.txt tmp_images images.txt devcontainer_images.txt dockerfile_images.txt docker_compose_images.txt generic_images.txt || true
-          echo "Old files removed." >> trivy.log
+          echo "Old files removed." | tee -a trivy.log
 
       - name: Find candidate files by filename patterns
         run: |
-          echo "Finding candidate files by filename patterns..." >> trivy.log
+          echo "Finding candidate files by filename patterns..." | tee -a trivy.log
           find . -type f \( \
             -iname 'Dockerfile*' -o \
             -iname '*docker-compose*.yml' -o \
@@ -116,44 +114,44 @@ jobs:
             -iname '*.yaml' -o \
             -iname '*.yml' \
           \) -not -path './.git/*' -print > candidate_files.txt || true
-          echo "Candidate file search completed." >> trivy.log
+          echo "Candidate file search completed." | tee -a trivy.log
 
       - name: Log candidate files
         run: |
-          echo "Logging candidate files..." >> trivy.log
-          echo "candidate_files_count=$(wc -l < candidate_files.txt 2>/dev/null || echo 0)" >> trivy.log
-          echo "candidate_files:" >> trivy.log
+          echo "Logging candidate files..." | tee -a trivy.log
+          echo "candidate_files_count=$(wc -l < candidate_files.txt 2>/dev/null || echo 0)" | tee -a trivy.log
+          echo "candidate_files:" | tee -a trivy.log
           if [ -s candidate_files.txt ]; then
-            sed 's/^/ - /' candidate_files.txt >> trivy.log
+            sed 's/^/ - /' candidate_files.txt | tee -a trivy.log
           else
-            echo " - (none)" >> trivy.log
+            echo " - (none)" | tee -a trivy.log
           fi
-          echo "Candidate files logged." >> trivy.log
+          echo "Candidate files logged." | tee -a trivy.log
 
       - name: Filter candidate files for image-like content
         run: |
-          echo "Filtering candidate files for image-like content..." >> trivy.log
+          echo "Filtering candidate files for image-like content..." | tee -a trivy.log
           while IFS= read -r f; do
             # Skip if empty
             [ -z "$f" ] && continue
 
-            echo "Processing file: $f" >> trivy.log
+            echo "Processing file: $f" | tee -a trivy.log
 
             # Check for common hints: 'image:' key, FROM lines, or any registry-looking token
             if grep -E -n "^\s*image\s*:|^\s*FROM\s+|${REGISTRY_PATTERN}|([a-z0-9.-]+(?::[0-9]+)?/)[A-Za-z0-9._/-]+" "$f" > /dev/null 2>&1; then
-              echo "File contains image-like content: $f" >> trivy.log
+              echo "File contains image-like content: $f" | tee -a trivy.log
               echo "$f" >> files_with_images.txt
             else
-              echo "No image-like content found in file: $f" >> trivy.log
+              echo "No image-like content found in file: $f" | tee -a trivy.log
             fi
           done < candidate_files.txt || true
-          echo "Filtering completed." >> trivy.log
+          echo "Filtering completed." | tee -a trivy.log
 
 
 
       - name: Extract image values from .devcontainer.json files
         run: |
-          echo "Extracting image values from .devcontainer.json files..." >> trivy.log
+          echo "Extracting image values from .devcontainer.json files..." | tee -a trivy.log
           # Find all .devcontainer.json files
           find . -type f -name 'devcontainer.json' -o -path '**/.devcontainer/devcontainer.json' -not -path './.git/*' > devcontainer_files.txt || true
 
@@ -162,25 +160,65 @@ jobs:
 
           # Process devcontainer.json files if any were found
           if [ -s devcontainer_files.txt ]; then
-            echo "Found $(wc -l < devcontainer_files.txt) devcontainer.json files" >> trivy.log
+            echo "Found $(wc -l < devcontainer_files.txt) devcontainer.json files" | tee -a trivy.log
             
             while IFS= read -r file; do
-              file_dir=$(dirname "$file")
-              echo "Processing $file" >> trivy.log
+              echo "Processing $file" | tee -a trivy.log
               
-              # Extract direct image reference if exists
-              image=$(jq -r '.image // empty' "$file")
+              # Simple approach: Extract image property lines that don't start with a comment
+              # Strip leading whitespace, then check if it starts with // before processing
+              image=$(grep -E '^\s*"image"\s*:' "$file" | grep -v '^\s*\/\/' | 
+                sed -E 's/^\s*"image"\s*:\s*"([^"]+)".*/\1/' | 
+                sed -E 's/,\s*$//' | 
+                head -1)
+                
+              # If no image found with simple approach, try secondary approach for differently formatted files
+              if [ -z "$image" ]; then
+                echo "  Trying alternative pattern matching..." | tee -a trivy.log
+                # Try with single quotes
+                image=$(grep -E '^\s*"image"\s*:' "$file" | grep -v '^\s*\/\/' | 
+                  sed -E "s/^\s*\"image\"\s*:\s*'([^']+)'.*/\1/" | 
+                  sed -E 's/,\s*$//' | 
+                  head -1)
+              fi
+              
+              # If still no image found, try one more pattern
+              if [ -z "$image" ]; then
+                echo "  Trying without quotes pattern..." | tee -a trivy.log
+                # Try with no quotes (for references like image: mcr.microsoft.com/...)
+                image=$(grep -E '^\s*"image"\s*:' "$file" | grep -v '^\s*\/\/' | 
+                  sed -E 's/^\s*"image"\s*:\s*([^,"]+).*/\1/' | 
+                  sed -E 's/,\s*$//' | 
+                  head -1)
+              fi
+              
               if [ ! -z "$image" ]; then
-                echo "Found image: $image" >> trivy.log
+                echo "Found image: $image" | tee -a trivy.log
                 echo "$image" >> devcontainer_images.txt
                 echo "$image" >> tmp_images || true
+              else
+                echo "  No image property found in file" | tee -a trivy.log
               fi
+            done < devcontainer_files.txt
+          else
+            echo "No devcontainer.json files found." | tee -a trivy.log
+          fi
 
-          echo "Image extraction from .devcontainer.json files completed." >> trivy.log
+          # Display the images found in devcontainer.json files
+          echo "==== Images found in devcontainer.json files ====" | tee -a trivy.log
+          if [ -s devcontainer_images.txt ]; then
+            echo "Content of devcontainer_images.txt:"
+            cat devcontainer_images.txt | tee -a trivy.log
+          else
+            echo "No images found in devcontainer.json files." | tee -a trivy.log
+          fi
+          echo "=================================================" | tee -a trivy.log
+
+          echo "Image extraction from .devcontainer.json files completed." | tee -a trivy.log
 
       - name: Extract image values from Dockerfiles
         run: |
-          echo "Extracting image values from Dockerfiles..." >> trivy.log
+          echo "Extracting image values from Dockerfiles..." | tee -a trivy.log
           # Find all Dockerfiles
           find . -type f -iname 'Dockerfile*' -not -path './.git/*' > dockerfile_files.txt || true
 
@@ -188,17 +226,17 @@ jobs:
           touch dockerfile_images.txt
 
           # Log the found Dockerfiles
-          echo "Found Dockerfiles:" >> trivy.log
+          echo "Found Dockerfiles:" | tee -a trivy.log
           if [ -s dockerfile_files.txt ]; then
-            cat dockerfile_files.txt >> trivy.log
+            cat dockerfile_files.txt | tee -a trivy.log
           else
-            echo "No Dockerfiles found." >> trivy.log
+            echo "No Dockerfiles found." | tee -a trivy.log
           fi
 
           # Extract "FROM" values with a more permissive filter
           if [ -s dockerfile_files.txt ]; then
             while IFS= read -r file; do
-              echo "Scanning file: $file" >> trivy.log
+              echo "Scanning file: $file" | tee -a trivy.log
               grep -o -E '^\s*FROM\s+[^\s]+' "$file" 2>/dev/null \
                 | sed -E 's/^\s*FROM\s+//' \
                 | sed -E 's/\s+AS\s+.*//' \
@@ -215,11 +253,11 @@ jobs:
           fi
           echo "====================================" | tee -a trivy.log
 
-          echo "Image extraction from Dockerfiles completed." >> trivy.log
+          echo "Image extraction from Dockerfiles completed." | tee -a trivy.log
 
       - name: Extract image values from Docker Compose files
         run: |
-          echo "Extracting image values from Docker Compose files..." >> trivy.log
+          echo "Extracting image values from Docker Compose files..." | tee -a trivy.log
           # Find all Docker Compose files
           find . -type f \( -iname '*docker-compose*.yml' -o -iname '*docker-compose*.yaml' \) -not -path './.git/*' > docker_compose_files.txt || true
 
@@ -230,29 +268,29 @@ jobs:
           # Extract all "image" and "container_name" values without filtering
           if [ -s docker_compose_files.txt ]; then
             while IFS= read -r file; do
-              echo "Scanning file: $file" >> trivy.log
+              echo "Scanning file: $file" | tee -a trivy.log
               
               # Extract the "image" values from the YAML file - grab entire value without filtering
-              echo "  Looking for image: properties..." >> trivy.log
+              echo "  Looking for image: properties..." | tee -a trivy.log
               grep -E '^\s*image:' "$file" 2>/dev/null | sed -E 's/^\s*image:\s*//' | 
               while IFS= read -r img; do
                 # Skip if empty
                 [ -z "$img" ] && continue
                 # Remove any quotes and trailing comments
                 cleaned_img=$(echo "$img" | sed -E 's/^["'"'"']//;s/["'"'"']$//;s/\s+#.*$//')
-                echo "  Found image: $cleaned_img" >> trivy.log
+                echo "  Found image: $cleaned_img" | tee -a trivy.log
                 echo "$cleaned_img" | tee -a docker_compose_images.txt >> tmp_images
               done
               
               # Extract the "container_name" values from the YAML file
-              echo "  Looking for container_name: properties..." >> trivy.log
+              echo "  Looking for container_name: properties..." | tee -a trivy.log
               grep -E '^\s*container_name:' "$file" 2>/dev/null | sed -E 's/^\s*container_name:\s*//' |
               while IFS= read -r container; do
                 # Skip if empty
                 [ -z "$container" ] && continue
                 # Remove any quotes and trailing comments
                 cleaned_container=$(echo "$container" | sed -E 's/^["'"'"']//;s/["'"'"']$//;s/\s+#.*$//')
-                echo "  Found container_name: $cleaned_container" >> trivy.log
+                echo "  Found container_name: $cleaned_container" | tee -a trivy.log
                 echo "$cleaned_container" >> container_names.txt
               done
             done < docker_compose_files.txt
@@ -276,18 +314,18 @@ jobs:
           fi
           echo "==================================================" | tee -a trivy.log
 
-          echo "Image extraction from Docker Compose files completed." >> trivy.log
+          echo "Image extraction from Docker Compose files completed." | tee -a trivy.log
 
       - name: Extract image tokens from discovered files
         run: |
-          echo "Extracting image tokens from discovered files..." >> trivy.log
+          echo "Extracting image tokens from discovered files..." | tee -a trivy.log
           
           # Create a separate file for generic image tokens
           touch generic_images.txt
           
           while IFS= read -r f; do
             [ -z "$f" ] && continue
-            echo "Scanning file: $f" >> trivy.log
+            echo "Scanning file: $f" | tee -a trivy.log
             
             # Extract image references with a more permissive filter
             grep -o -E '([a-zA-Z0-9][a-zA-Z0-9._-]*(?::[0-9]+)?/)?[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]{64})' "$f" 2>/dev/null \
@@ -315,11 +353,11 @@ jobs:
           fi
           echo "===================================" | tee -a trivy.log
           
-          echo "Image token extraction completed." >> trivy.log
+          echo "Image token extraction completed." | tee -a trivy.log
 
       - name: Dedupe image list
         run: |
-          echo "Deduplicating and writing final images.txt..." >> trivy.log
+          echo "Deduplicating and writing final images.txt..." | tee -a trivy.log
           if [ -f tmp_images ]; then
             sort -u tmp_images > images.txt || true
           else
@@ -335,49 +373,15 @@ jobs:
           echo "Total unique images: $([ -f images.txt ] && wc -l < images.txt || echo 0)" | tee -a trivy.log
           echo "===============================" | tee -a trivy.log
           
-          echo "Final images.txt written." >> trivy.log
-          
-      - name: Filter images.txt for valid Docker image references
-        run: |
-          echo "Filtering images.txt for valid Docker image references..." >> trivy.log
-          
-          # Create a temporary file for the filtered images
-          touch filtered_images.txt
-          
-          # Define a more precise regex for Docker image references
-          # This specifically looks for common registry patterns and valid image formats
-          while IFS= read -r img; do
-            # Skip if empty
-            [ -z "$img" ] && continue
-            
-            # Only keep lines that:
-            # 1. Start with a known registry (docker.io, ghcr.io, mcr.microsoft.com, etc.)
-            # 2. Have a valid Docker image format with tags or digests
-            # 3. Are official Docker Hub images (ubuntu, alpine, etc.)
-            if echo "$img" | grep -E "^(${REGISTRY_PATTERN})/|^[a-zA-Z0-9][-a-zA-Z0-9]*/[a-zA-Z0-9][-a-zA-Z0-9]*|^(${OFFICIAL_PATTERN})(:[a-zA-Z0-9._-]+)?$" > /dev/null; then
-              echo "$img" >> filtered_images.txt
-            else
-              echo "Filtering out non-Docker image: $img" >> trivy.log
-            fi
-          done < images.txt
-          
-          # Replace the original images.txt with the filtered version
-          mv filtered_images.txt images.txt
-          
-          # Log the filtering results
-          count=$(wc -l < images.txt || echo 0)
-          echo "After filtering, found $count valid Docker images" | tee -a trivy.log
-          echo "Filtered images.txt written." >> trivy.log
-          
-          # Log the actual images for visibility
-          echo "==== Filtered Docker Images ====" | tee -a trivy.log
+          echo "Final images.txt written." | tee -a trivy.log
+          echo "Contents of images.txt:" | tee -a trivy.log
           if [ -s images.txt ]; then
             cat images.txt | tee -a trivy.log
           else
-            echo "No valid Docker images found after filtering." | tee -a trivy.log
+            echo "images.txt is empty." | tee -a trivy.log
           fi
           echo "===============================" | tee -a trivy.log
-
+          
       - name: Remove images by not-allowed list prefixes
         run: |
           echo "Removing images that start with not-allowed prefixes..." | tee -a trivy.log
@@ -455,9 +459,25 @@ jobs:
           echo "Distinct Docker images found: ${found_count}" | tee -a trivy.log
           echo "======================" | tee -a trivy.log
           
-          echo "files_with_images=${images_in_files_count}" >> trivy.log
-          echo "found_images_file=${found_count}" >> trivy.log
-          echo "Final counts logged." >> trivy.log
+          # Display final images with counts - sort by frequency
+          echo "==== Final Images by Frequency ====" | tee -a trivy.log
+          if [ -s images.txt ]; then
+            # Count occurrences of each image across all source files
+            cat devcontainer_images.txt dockerfile_images.txt docker_compose_images.txt generic_images.txt 2>/dev/null | 
+              sort | uniq -c | sort -nr | 
+              while read count image; do
+                echo "$count occurrences: $image" | tee -a trivy.log
+              done
+          else
+            echo "No images found." | tee -a trivy.log
+          fi
+          echo "=================================" | tee -a trivy.log
+          
+          echo "=================================" | tee -a trivy.log
+          
+          echo "files_with_images=${images_in_files_count}" | tee -a trivy.log
+          echo "found_images_file=${found_count}" | tee -a trivy.log
+          echo "Final counts logged." | tee -a trivy.log
 
           # If stop_workflow is already set to true by Trivy check, don't override it
           if [[ "${stop_workflow:-}" != "true" ]]; then
@@ -474,7 +494,7 @@ jobs:
 
       - name: Debug stop_workflow variable
         run: |
-          echo "stop_workflow==${{ env.stop_workflow }}"
+          echo "stop_workflow==${{ env.stop_workflow }}" | tee -a trivy.log
 
       - name: Upload log artifact
         if: env.stop_workflow == true && env.ACT != 'true'
@@ -513,8 +533,8 @@ jobs:
           # Ensure the files are accessible to all users
           sudo chmod 666 /tmp/act-shared-data/*
           
-          echo "Files copied to shared location for Act:"
-          ls -la /tmp/act-shared-data/
+          echo "Files copied to shared location for Act:" | tee -a trivy.log
+          ls -la /tmp/act-shared-data/ | tee -a trivy.log
           
           # Create an artifact-like log for tracking
           echo "Created find-images-${GITHUB_EVENT_INPUT_REPOOWNER:-local}-${GITHUB_EVENT_INPUT_REPONAME:-repo}-${GITHUB_EVENT_INPUT_RUNID:-test} artifacts" > /tmp/act-shared-data/artifact-log.txt
@@ -549,7 +569,7 @@ jobs:
           # set repo name to input ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
           REPO_NAME="https://github.com/${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}"
           echo "Scanning repository $REPO_NAME" | tee -a trivy-repo-scan.log
-          trivy repo --scanners vuln,secret,misconfig,license $REPO_NAME  --format json -o trivy-repo-scan.json >> trivy-repo-scan.log 2>&1
+          trivy repo --scanners vuln,secret,misconfig,license $REPO_NAME  --format json -o trivy-repo-scan.json | tee -a trivy-repo-scan.log 2>&1
           set -e
 
       # Upload images.txt as an artifact to be used in the next job
@@ -585,24 +605,24 @@ jobs:
       - name: Get files from shared location (Act only)
         if: env.ACT == 'true'
         run: |
-          echo "Running in Act mode - retrieving files from shared location..."
+          echo "Running in Act mode - retrieving files from shared location..." | tee -a trivy.log
           sudo mkdir -p /tmp/act-shared-data
-          echo "Shared directory contents:"
-          ls -la /tmp/act-shared-data/ || echo "Shared directory not found"
+          echo "Shared directory contents:" | tee -a trivy.log
+          ls -la /tmp/act-shared-data/ | tee -a trivy.log || echo "Shared directory not found" | tee -a trivy.log
           touch images.txt trivy.log files_with_images.txt candidate_files.txt
-          cp -f /tmp/act-shared-data/images.txt ./ || echo "images.txt not found in shared location"
-          cp -f /tmp/act-shared-data/files_with_images.txt ./ || echo "files_with_images.txt not found in shared location" 
-          cp -f /tmp/act-shared-data/trivy.log ./ || echo "trivy.log not found in shared location"
-          cp -f /tmp/act-shared-data/candidate_files.txt ./ || echo "candidate_files.txt not found in shared location"
-          cp -f /tmp/act-shared-data/devcontainer_images.txt ./ 2>/dev/null || echo "devcontainer_images.txt not found"
-          cp -f /tmp/act-shared-data/dockerfile_images.txt ./ 2>/dev/null || echo "dockerfile_images.txt not found"
-          cp -f /tmp/act-shared-data/docker_compose_images.txt ./ 2>/dev/null || echo "docker_compose_images.txt not found"
-          cp -f /tmp/act-shared-data/container_names.txt ./ 2>/dev/null || echo "container_names.txt not found"
-          cp -f /tmp/act-shared-data/generic_images.txt ./ 2>/dev/null || echo "generic_images.txt not found"
-          echo "Using artifact from:"
-          cat /tmp/act-shared-data/artifact-log.txt 2>/dev/null || echo "No artifact log found"
-          echo "Current directory contents after copying:"
-          ls -la
+          cp -f /tmp/act-shared-data/images.txt ./ || echo "images.txt not found in shared location" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/files_with_images.txt ./ || echo "files_with_images.txt not found in shared location" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/trivy.log ./ || echo "trivy.log not found in shared location" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/candidate_files.txt ./ || echo "candidate_files.txt not found in shared location" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/devcontainer_images.txt ./ 2>/dev/null || echo "devcontainer_images.txt not found" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/dockerfile_images.txt ./ 2>/dev/null || echo "dockerfile_images.txt not found" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/docker_compose_images.txt ./ 2>/dev/null || echo "docker_compose_images.txt not found" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/container_names.txt ./ 2>/dev/null || echo "container_names.txt not found" | tee -a trivy.log
+          cp -f /tmp/act-shared-data/generic_images.txt ./ 2>/dev/null || echo "generic_images.txt not found" | tee -a trivy.log
+          echo "Using artifact from:" | tee -a trivy.log
+          cat /tmp/act-shared-data/artifact-log.txt 2>/dev/null | tee -a trivy.log || echo "No artifact log found" | tee -a trivy.log
+          echo "Current directory contents after copying:" | tee -a trivy.log
+          ls -la | tee -a trivy.log
 
       # Generate matrix from images.txt
       - name: Generate image matrix
@@ -640,23 +660,23 @@ jobs:
           set +e
           mkdir -p failures
           img="${{ matrix.image }}"
-          echo "Image to scan: $img"
+          echo "Image to scan: $img" | tee -a trivy.log
           # Skip if image is empty
           [ -z "$img" ] && exit 0
           file=$(echo "$img" | sed -E 's/[^A-Za-z0-9._-]/_/g')
-          echo "Sanitized filename: $file"
-          echo "Sanitized from sanitize-name step: ${{ steps.sanitize-name.outputs.file }}"
+          echo "Sanitized filename: $file" | tee -a trivy.log
+          echo "Sanitized from sanitize-name step: ${{ steps.sanitize-name.outputs.file }}" | tee -a trivy.log
           echo "Scanning $img -> ${file}.json" | tee -a trivy.log
           
           # Run trivy scan (using container's pre-installed Trivy)
           trivy image --scanners vuln,secret,misconfig,license --quiet --format json -o "${file}.json" "$img"
           status=$?
           if [ $status -eq 0 ]; then
-            echo "SUCCESS: $img" >> trivy.log
+            echo "SUCCESS: $img" | tee -a trivy.log
           else
-            echo "FAILED: $img" >> trivy.log
+            echo "FAILED: $img" | tee -a trivy.log
             echo "scan failed for $img (exit code $status)" > "failures/${file}.scan_error"
-            echo "scan failed for $img (exit code $status)" >> trivy.log
+            echo "scan failed for $img (exit code $status)" | tee -a trivy.log
           fi
           set -e
 
