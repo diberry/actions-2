@@ -554,7 +554,7 @@ jobs:
           # set repo name to input ${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}
           REPO_NAME="https://github.com/${{ github.event.inputs.repoOwner }}/${{ github.event.inputs.repoName }}"
           echo "Scanning repository $REPO_NAME" | tee -a trivy-repo-scan.log
-          trivy repo $REPO_NAME --format json -o trivy-repo-scan.json >> trivy-repo-scan.log 2>&1
+          trivy repo --scanners vuln,secret,misconfig,license $REPO_NAME  --format json -o trivy-repo-scan.json >> trivy-repo-scan.log 2>&1
           set -e
 
       # Upload images.txt as an artifact to be used in the next job
@@ -653,7 +653,7 @@ jobs:
           echo "Scanning $img -> ${file}.json" | tee -a trivy.log
           
           # Run trivy scan (using container's pre-installed Trivy)
-          trivy image --quiet --format json -o "${file}.json" "$img"
+          trivy image --scanners vuln,secret,misconfig,license --quiet --format json -o "${file}.json" "$img"
           status=$?
           if [ $status -eq 0 ]; then
             echo "SUCCESS: $img" >> trivy.log
