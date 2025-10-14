@@ -55,10 +55,11 @@ jobs:
         # Set report filename with timestamp
         REPORT_FILE="reports/activity-report-${FROM_DATE}-to-${TO_DATE}.md"
         
-        echo "# GitHub Activity Report" > $REPORT_FILE
+        echo "# GitHub Activity Report - All Repositories" > $REPORT_FILE
         echo "" >> $REPORT_FILE
         echo "**User:** $USERNAME" >> $REPORT_FILE
         echo "**Period:** $FROM_DATE to $TO_DATE" >> $REPORT_FILE
+        echo "**Scope:** All repositories accessible to the user" >> $REPORT_FILE
         echo "**Generated:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $REPORT_FILE
         echo "" >> $REPORT_FILE
         echo "---" >> $REPORT_FILE
@@ -101,10 +102,10 @@ jobs:
           echo "" >> $REPORT_FILE
         }
         
-        # Issues created by user
-        echo "📊 Fetching issues created by $USERNAME..."
+        # Issues created by user (across all repositories)
+        echo "📊 Fetching issues created by $USERNAME across all repositories..."
         ISSUES_QUERY='query($login: String!, $from: String!, $to: String!) {
-          search(query: "author:\($login) created:\($from)..\($to)", type: ISSUE, first: 100) {
+          search(query: "author:\($login) created:\($from)..\($to) type:issue", type: ISSUE, first: 100) {
             issueCount
             nodes {
               ... on Issue {
@@ -132,10 +133,10 @@ jobs:
         
         format_results "🐛 Issues Created" "issue" "$ISSUES_RESULT"
         
-        # Pull requests created by user
-        echo "📊 Fetching pull requests created by $USERNAME..."
+        # Pull requests created by user (across all repositories)
+        echo "📊 Fetching pull requests created by $USERNAME across all repositories..."
         PRS_QUERY='query($login: String!, $from: String!, $to: String!) {
-          search(query: "author:\($login) created:\($from)..\($to)", type: PULL_REQUEST, first: 100) {
+          search(query: "author:\($login) created:\($from)..\($to) type:pr", type: PULL_REQUEST, first: 100) {
             issueCount
             nodes {
               ... on PullRequest {
@@ -163,10 +164,10 @@ jobs:
         
         format_results "🔀 Pull Requests Created" "pr" "$PRS_RESULT"
         
-        # Pull requests reviewed by user
-        echo "📊 Fetching pull requests reviewed by $USERNAME..."
+        # Pull requests reviewed by user (across all repositories)
+        echo "📊 Fetching pull requests reviewed by $USERNAME across all repositories..."
         REVIEWED_QUERY='query($login: String!, $from: String!, $to: String!) {
-          search(query: "reviewed-by:\($login) updated:\($from)..\($to)", type: PULL_REQUEST, first: 100) {
+          search(query: "reviewed-by:\($login) updated:\($from)..\($to) type:pr", type: PULL_REQUEST, first: 100) {
             issueCount
             nodes {
               ... on PullRequest {
@@ -194,10 +195,10 @@ jobs:
         
         format_results "👀 Pull Requests Reviewed" "reviewed" "$REVIEWED_RESULT"
         
-        # Issues assigned to user
-        echo "📊 Fetching issues assigned to $USERNAME..."
+        # Issues assigned to user (across all repositories)
+        echo "📊 Fetching issues assigned to $USERNAME across all repositories..."
         ASSIGNED_QUERY='query($login: String!, $from: String!, $to: String!) {
-          search(query: "assignee:\($login) updated:\($from)..\($to)", type: ISSUE, first: 100) {
+          search(query: "assignee:\($login) updated:\($from)..\($to) type:issue", type: ISSUE, first: 100) {
             issueCount
             nodes {
               ... on Issue {
@@ -225,6 +226,62 @@ jobs:
         
         format_results "📋 Issues Assigned" "assigned" "$ASSIGNED_RESULT"
         
+        # Repository contributions (commits)
+        echo "📊 Fetching commits by $USERNAME across all repositories..."
+        COMMITS_QUERY='query($login: String!, $from: String!, $to: String!) {
+          search(query: "author:\($login) committer-date:\($from)..\($to)", type: COMMIT, first: 100) {
+            codeCount
+            nodes {
+              ... on Commit {
+                oid
+                message
+                committedDate
+                url
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }'
+        
+        COMMITS_RESULT=$(curl -s -H "Authorization: bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -X POST \
+          -d "{\"query\": \"$COMMITS_QUERY\", \"variables\": {\"login\": \"$USERNAME\", \"from\": \"$FROM_DATE\", \"to\": \"$TO_DATE\"}}" \
+          https://api.github.com/graphql)
+        
+        # Format commits section
+        echo "## 💻 Commits" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        
+        COMMITS_COUNT=$(echo "$COMMITS_RESULT" | jq -r '.data.search.codeCount // 0')
+        echo "**Total:** $COMMITS_COUNT commits" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        
+        if [ "$COMMITS_COUNT" -gt 0 ]; then
+          echo "| # | Message | Repository | Date | Link |" >> $REPORT_FILE
+          echo "|---|---------|------------|------|------|" >> $REPORT_FILE
+          
+          echo "$COMMITS_RESULT" | jq -r '.data.search.nodes[] | 
+            [
+              (.message | split("\n")[0] | if length > 50 then .[0:50] + "..." else . end),
+              (.repository.owner.login + "/" + .repository.name),
+              (.committedDate | split("T")[0]),
+              .url
+            ] | @tsv' | \
+          awk -F'\t' 'BEGIN{i=1} {
+            printf "| %d | %s | %s | %s | [Link](%s) |\n", i++, $1, $2, $3, $4
+          }' >> $REPORT_FILE
+        else
+          echo "No commits found for this period." >> $REPORT_FILE
+        fi
+        
+        echo "" >> $REPORT_FILE
+        
         # Add summary section
         echo "## 📈 Summary" >> $REPORT_FILE
         echo "" >> $REPORT_FILE
@@ -234,7 +291,8 @@ jobs:
         PRS_COUNT=$(echo "$PRS_RESULT" | jq -r '.data.search.issueCount // 0')
         REVIEWED_COUNT=$(echo "$REVIEWED_RESULT" | jq -r '.data.search.issueCount // 0')
         ASSIGNED_COUNT=$(echo "$ASSIGNED_RESULT" | jq -r '.data.search.issueCount // 0')
-        TOTAL_ACTIVITY=$((ISSUES_COUNT + PRS_COUNT + REVIEWED_COUNT + ASSIGNED_COUNT))
+        COMMITS_COUNT=$(echo "$COMMITS_RESULT" | jq -r '.data.search.codeCount // 0')
+        TOTAL_ACTIVITY=$((ISSUES_COUNT + PRS_COUNT + REVIEWED_COUNT + ASSIGNED_COUNT + COMMITS_COUNT))
         
         echo "| Activity Type | Count |" >> $REPORT_FILE
         echo "|---------------|-------|" >> $REPORT_FILE
@@ -242,6 +300,7 @@ jobs:
         echo "| Pull Requests Created | $PRS_COUNT |" >> $REPORT_FILE
         echo "| Pull Requests Reviewed | $REVIEWED_COUNT |" >> $REPORT_FILE
         echo "| Issues Assigned | $ASSIGNED_COUNT |" >> $REPORT_FILE
+        echo "| Commits | $COMMITS_COUNT |" >> $REPORT_FILE
         echo "| **Total Activity** | **$TOTAL_ACTIVITY** |" >> $REPORT_FILE
         echo "" >> $REPORT_FILE
         
