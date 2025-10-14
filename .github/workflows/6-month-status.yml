@@ -1,0 +1,270 @@
+name: Last semester
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: 'Start date (YYYY-MM-DD)'
+        required: true
+        default: '2025-04-01'
+      to_date:
+        description: 'End date (YYYY-MM-DD)'
+        required: true
+        default: '2025-09-30'
+      username:
+        description: 'GitHub username to analyze'
+        required: true
+        default: 'diberry'
+  # schedule:
+  #   # Run monthly on the 1st at 9 AM UTC
+  #   - cron: '0 9 1 * *'
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    name: Generate GitHub Activity Report
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set default dates for scheduled runs
+      if: github.event_name == 'schedule'
+      run: |
+        # For scheduled runs, analyze the previous month
+        FROM_DATE=$(date -d "$(date +%Y-%m-01) -1 month" +%Y-%m-%d)
+        TO_DATE=$(date -d "$(date +%Y-%m-01) -1 day" +%Y-%m-%d)
+        echo "FROM_DATE=$FROM_DATE" >> $GITHUB_ENV
+        echo "TO_DATE=$TO_DATE" >> $GITHUB_ENV
+        echo "USERNAME=${{ github.repository_owner }}" >> $GITHUB_ENV
+        
+    - name: Set input dates for manual runs
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        echo "FROM_DATE=${{ github.event.inputs.from_date }}" >> $GITHUB_ENV
+        echo "TO_DATE=${{ github.event.inputs.to_date }}" >> $GITHUB_ENV
+        echo "USERNAME=${{ github.event.inputs.username }}" >> $GITHUB_ENV
+
+    - name: Generate Activity Report
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Create reports directory
+        mkdir -p reports
+        
+        # Set report filename with timestamp
+        REPORT_FILE="reports/activity-report-${FROM_DATE}-to-${TO_DATE}.md"
+        
+        echo "# GitHub Activity Report" > $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        echo "**User:** $USERNAME" >> $REPORT_FILE
+        echo "**Period:** $FROM_DATE to $TO_DATE" >> $REPORT_FILE
+        echo "**Generated:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        echo "---" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        
+        # Function to format GraphQL query results
+        format_results() {
+          local section_title="$1"
+          local query_type="$2"
+          local json_data="$3"
+          
+          echo "## $section_title" >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
+          
+          # Count total items
+          local count=$(echo "$json_data" | jq -r '.data.search.issueCount // 0')
+          echo "**Total:** $count items" >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
+          
+          if [ "$count" -gt 0 ]; then
+            echo "| # | Title | Repository | State | Date | Link |" >> $REPORT_FILE
+            echo "|---|-------|------------|-------|------|------|" >> $REPORT_FILE
+            
+            echo "$json_data" | jq -r '.data.search.nodes[] | 
+              [
+                .number,
+                .title,
+                (.repository.owner.login + "/" + .repository.name),
+                .state,
+                (.createdAt // .updatedAt | split("T")[0]),
+                .url
+              ] | @tsv' | \
+            awk -F'\t' 'BEGIN{i=1} {
+              printf "| %d | %s | %s | %s | %s | [Link](%s) |\n", i++, $2, $3, $4, $5, $6
+            }' >> $REPORT_FILE
+          else
+            echo "No items found for this period." >> $REPORT_FILE
+          fi
+          
+          echo "" >> $REPORT_FILE
+        }
+        
+        # Issues created by user
+        echo "📊 Fetching issues created by $USERNAME..."
+        ISSUES_QUERY='query($login: String!, $from: String!, $to: String!) {
+          search(query: "author:\($login) created:\($from)..\($to)", type: ISSUE, first: 100) {
+            issueCount
+            nodes {
+              ... on Issue {
+                number
+                title
+                createdAt
+                state
+                url
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }'
+        
+        ISSUES_RESULT=$(curl -s -H "Authorization: bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -X POST \
+          -d "{\"query\": \"$ISSUES_QUERY\", \"variables\": {\"login\": \"$USERNAME\", \"from\": \"$FROM_DATE\", \"to\": \"$TO_DATE\"}}" \
+          https://api.github.com/graphql)
+        
+        format_results "🐛 Issues Created" "issue" "$ISSUES_RESULT"
+        
+        # Pull requests created by user
+        echo "📊 Fetching pull requests created by $USERNAME..."
+        PRS_QUERY='query($login: String!, $from: String!, $to: String!) {
+          search(query: "author:\($login) created:\($from)..\($to)", type: PULL_REQUEST, first: 100) {
+            issueCount
+            nodes {
+              ... on PullRequest {
+                number
+                title
+                createdAt
+                state
+                url
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }'
+        
+        PRS_RESULT=$(curl -s -H "Authorization: bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -X POST \
+          -d "{\"query\": \"$PRS_QUERY\", \"variables\": {\"login\": \"$USERNAME\", \"from\": \"$FROM_DATE\", \"to\": \"$TO_DATE\"}}" \
+          https://api.github.com/graphql)
+        
+        format_results "🔀 Pull Requests Created" "pr" "$PRS_RESULT"
+        
+        # Pull requests reviewed by user
+        echo "📊 Fetching pull requests reviewed by $USERNAME..."
+        REVIEWED_QUERY='query($login: String!, $from: String!, $to: String!) {
+          search(query: "reviewed-by:\($login) updated:\($from)..\($to)", type: PULL_REQUEST, first: 100) {
+            issueCount
+            nodes {
+              ... on PullRequest {
+                number
+                title
+                updatedAt
+                state
+                url
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }'
+        
+        REVIEWED_RESULT=$(curl -s -H "Authorization: bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -X POST \
+          -d "{\"query\": \"$REVIEWED_QUERY\", \"variables\": {\"login\": \"$USERNAME\", \"from\": \"$FROM_DATE\", \"to\": \"$TO_DATE\"}}" \
+          https://api.github.com/graphql)
+        
+        format_results "👀 Pull Requests Reviewed" "reviewed" "$REVIEWED_RESULT"
+        
+        # Issues assigned to user
+        echo "📊 Fetching issues assigned to $USERNAME..."
+        ASSIGNED_QUERY='query($login: String!, $from: String!, $to: String!) {
+          search(query: "assignee:\($login) updated:\($from)..\($to)", type: ISSUE, first: 100) {
+            issueCount
+            nodes {
+              ... on Issue {
+                number
+                title
+                updatedAt
+                state
+                url
+                repository {
+                  name
+                  owner {
+                    login
+                  }
+                }
+              }
+            }
+          }
+        }'
+        
+        ASSIGNED_RESULT=$(curl -s -H "Authorization: bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          -X POST \
+          -d "{\"query\": \"$ASSIGNED_QUERY\", \"variables\": {\"login\": \"$USERNAME\", \"from\": \"$FROM_DATE\", \"to\": \"$TO_DATE\"}}" \
+          https://api.github.com/graphql)
+        
+        format_results "📋 Issues Assigned" "assigned" "$ASSIGNED_RESULT"
+        
+        # Add summary section
+        echo "## 📈 Summary" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        
+        # Calculate totals
+        ISSUES_COUNT=$(echo "$ISSUES_RESULT" | jq -r '.data.search.issueCount // 0')
+        PRS_COUNT=$(echo "$PRS_RESULT" | jq -r '.data.search.issueCount // 0')
+        REVIEWED_COUNT=$(echo "$REVIEWED_RESULT" | jq -r '.data.search.issueCount // 0')
+        ASSIGNED_COUNT=$(echo "$ASSIGNED_RESULT" | jq -r '.data.search.issueCount // 0')
+        TOTAL_ACTIVITY=$((ISSUES_COUNT + PRS_COUNT + REVIEWED_COUNT + ASSIGNED_COUNT))
+        
+        echo "| Activity Type | Count |" >> $REPORT_FILE
+        echo "|---------------|-------|" >> $REPORT_FILE
+        echo "| Issues Created | $ISSUES_COUNT |" >> $REPORT_FILE
+        echo "| Pull Requests Created | $PRS_COUNT |" >> $REPORT_FILE
+        echo "| Pull Requests Reviewed | $REVIEWED_COUNT |" >> $REPORT_FILE
+        echo "| Issues Assigned | $ASSIGNED_COUNT |" >> $REPORT_FILE
+        echo "| **Total Activity** | **$TOTAL_ACTIVITY** |" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
+        
+        echo "---" >> $REPORT_FILE
+        echo "*Report generated by GitHub Actions*" >> $REPORT_FILE
+        
+        echo "✅ Report generated: $REPORT_FILE"
+        echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_ENV
+
+    - name: Upload Activity Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: github-activity-report-${{ env.FROM_DATE }}-to-${{ env.TO_DATE }}
+        path: reports/
+        retention-days: 90
+
+    - name: Display Report Summary
+      run: |
+        echo "🎉 Activity report generated successfully!"
+        echo ""
+        echo "📁 Report saved to: $REPORT_FILE"
+        echo "📊 Report covers period: $FROM_DATE to $TO_DATE"
+        echo "👤 User analyzed: $USERNAME"
+        echo ""
+        echo "📋 Quick Summary:"
+        tail -n 10 $REPORT_FILE
