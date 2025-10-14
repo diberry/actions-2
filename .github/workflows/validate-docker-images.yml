@@ -29,6 +29,23 @@ permissions:
 
 
 jobs:
+
+  create-empty-artifact:
+    name: Create empty artiface
+    runs-on: ubuntu-latest
+    steps:
+      - name: start
+        run: |
+          echo "${{ github.event.inputs.runId }} started" >> start.log
+
+      - name: Upload artifact with runId in file name
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-started-${{ github.event.inputs.runId }}
+          path: |
+            start.log
+
+
   find-images:
     name: Find Docker Images
     runs-on: ubuntu-latest
